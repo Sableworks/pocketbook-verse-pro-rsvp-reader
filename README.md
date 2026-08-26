@@ -1,52 +1,58 @@
-# PocketBook RSVP
+# PocketBook Verse Pro Color — RSVP Reader
 
-**RSVP Reader** — aplikacja RSVP (Rapid Serial Visual Presentation) do czytania EPUB na czytnikach PocketBook (InkView / SDK 6).
+**RSVP Reader** — a Rapid Serial Visual Presentation (RSVP) app for reading EPUB on the **PocketBook Verse Pro Color (B300)**. Built with InkView / SDK 6. Other PocketBook models are untested — use at your own risk.
 
-## Budowanie (Docker)
+The on-device UI is in Polish; this README is in English for GitHub.
 
-Obraz zawiera toolchain ARM PocketBook oraz zależności (libzip, libxml2).
+## Build (Docker)
+
+The image includes the PocketBook ARM toolchain and dependencies (libzip, libxml2).
 
 ```bash
-# Jednorazowo — zbuduj obraz (Apple Silicon: wymuś amd64)
+# One-time — build the image (Apple Silicon: force amd64)
 docker build --platform linux/amd64 -t pb-rsvp-builder .
 
-# Kompilacja
+# Compile
 docker run --rm --platform linux/amd64 -v "$(pwd):/project" pb-rsvp-builder \
   -c 'mkdir -p build && cd build && cmake -DCMAKE_TOOLCHAIN_FILE=/SDK/share/cmake/arm_conf.cmake .. && cmake --build .'
 ```
 
-Wynik: `build/rsvp.app` (nazwa pliku binarnego; w UI aplikacja wyświetla się jako **RSVP Reader**).
+Output: `build/rsvp.app` (binary filename; the app displays as **RSVP Reader** in the UI).
 
-## Instalacja na urządzeniu
+## Install on device
 
-1. Podłącz PocketBook przez USB (tryb PC Link / masa).
-2. Skopiuj `build/rsvp.app` do katalogu `applications/` na pamięci urządzenia (`/mnt/ext1/applications/`).
-3. **Odłącz USB** (ważne — przy podłączonym PC Link aplikacje często nie widzą plików).
-4. Uruchom **RSVP Reader** (`rsvp.app`) z menu aplikacji.
+1. Connect the PocketBook via USB (PC Link / mass storage).
+2. Copy `build/rsvp.app` to `applications/` on device storage (`/mnt/ext1/applications/`).
+3. **Disconnect USB** (important — with PC Link active, apps often cannot see files).
+4. Launch **RSVP Reader** (`rsvp.app`) from the applications menu.
 
-Postęp i tempo zapisują się w `/mnt/ext1/.rsvp_saves.ini`.
+Reading progress and WPM are saved in `/mnt/ext1/.rsvp_saves.ini`.
 
-## Sterowanie
+## Controls
 
-| Akcja | Gest / klawisz |
+| Action | Gesture / key |
 | --- | --- |
-| Pauza → panel opcji | Tap podczas odtwarzania |
-| Start / Wznów | Tap „Start” / „Wznów” (lub podgląd słowa) |
-| Tempo ±10 sł/min | Swipe w górę/dół (play lub pauza) albo −10 / +10 w panelu |
-| Pomiń słowa | ◄ / ► (PREV / NEXT) |
-| Rozdziały | Wiersz „Rozdziały” w panelu pauzy |
-| ±1 rozdział / początek | Wiersz nawigacji w panelu pauzy |
-| Inna książka | „Inna książka” lub **Back** |
-| Wyjście z aplikacji | **Home** |
+| Pause → options panel | Tap while playing |
+| Start / Resume | Tap “Start” / “Wznów” (or tap the word preview) |
+| Speed ±10 WPM | Swipe up/down (play or pause) or −10 / +10 in the panel |
+| Skip words | ◄ / ► (PREV / NEXT) |
+| Chapters | “Rozdziały” row in the pause panel |
+| ±1 chapter / start of book | Navigation row in the pause panel |
+| Another book | “Inna książka” or **Back** |
+| Exit app | **Home** |
 
-Po otwarciu książki odtwarzanie **nie** startuje samo — widać panel z postępem (%), WPM i przyciskiem Start/Wznów.
+After opening a book, playback does **not** start automatically — you see a panel with progress (%), WPM, and Start/Resume.
 
-## Testy hosta (opcjonalnie)
+## Host tests (optional)
 
-Prosty smoke test algorytmów pomocniczych (bez SDK InkView):
+Simple smoke test for helper algorithms (no InkView SDK):
 
 ```bash
 cc -O2 -Wall -o tests/host_smoke tests/host_smoke.c && ./tests/host_smoke
 ```
 
-Pełny parser EPUB (spine / OPF) wymaga libzip + libxml2 i jest weryfikowany na urządzeniu / w obrazie Docker.
+Full EPUB parsing (spine / OPF) requires libzip + libxml2 and is verified on device / in the Docker image.
+
+## Credits
+
+Made by Mateusz Blumensztajn ([Sableworks](https://github.com/Sableworks)).

@@ -6,8 +6,8 @@ cmake_minimum_required(VERSION 3.21)
 project(rsvp C)
 
 if(NOT CMAKE_CROSSCOMPILING)
-  message(WARNING "Brak toolchaina PocketBook. "
-                  "Użyj: -DCMAKE_TOOLCHAIN_FILE=/SDK/share/cmake/arm_conf.cmake")
+  message(WARNING "PocketBook toolchain missing. "
+                  "Use: -DCMAKE_TOOLCHAIN_FILE=/SDK/share/cmake/arm_conf.cmake")
 endif()
 
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
