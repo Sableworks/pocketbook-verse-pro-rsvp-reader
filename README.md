@@ -4,27 +4,17 @@
 
 The on-device UI is in Polish; this README is in English for GitHub.
 
-## Build (Docker)
+## Download
 
-The image includes the PocketBook ARM toolchain and dependencies (libzip, libxml2).
-
-```bash
-# One-time — build the image (Apple Silicon: force amd64)
-docker build --platform linux/amd64 -t pb-rsvp-builder .
-
-# Compile
-docker run --rm --platform linux/amd64 -v "$(pwd):/project" pb-rsvp-builder \
-  -c 'mkdir -p build && cd build && cmake -DCMAKE_TOOLCHAIN_FILE=/SDK/share/cmake/arm_conf.cmake .. && cmake --build .'
-```
-
-Output: `build/rsvp.app` (binary filename; the app displays as **RSVP Reader** in the UI).
+**[Download the latest release (`rsvp.app`)](https://github.com/Sableworks/pocketbook-verse-pro-rsvp-reader/releases/latest)** — ready to copy onto your PocketBook. No build tools required.
 
 ## Install on device
 
-1. Connect the PocketBook via USB (PC Link / mass storage).
-2. Copy `build/rsvp.app` to `applications/` on device storage (`/mnt/ext1/applications/`).
-3. **Disconnect USB** (important — with PC Link active, apps often cannot see files).
-4. Launch **RSVP Reader** (`rsvp.app`) from the applications menu.
+1. Download `rsvp.app` from the [latest release](https://github.com/Sableworks/pocketbook-verse-pro-rsvp-reader/releases/latest).
+2. Connect the PocketBook via USB (PC Link / mass storage).
+3. Copy `rsvp.app` to `applications/` on device storage (`/mnt/ext1/applications/`).
+4. **Disconnect USB** (important — with PC Link active, apps often cannot see files).
+5. Launch **RSVP Reader** (`rsvp.app`) from the applications menu.
 
 Reading progress and WPM are saved in `/mnt/ext1/.rsvp_saves.ini`.
 
@@ -42,6 +32,23 @@ Reading progress and WPM are saved in `/mnt/ext1/.rsvp_saves.ini`.
 | Exit app | **Home** |
 
 After opening a book, playback does **not** start automatically — you see a panel with progress (%), WPM, and Start/Resume.
+
+## Build from source (optional)
+
+Only needed if you want to modify or rebuild the app. End users should use the [prebuilt release](https://github.com/Sableworks/pocketbook-verse-pro-rsvp-reader/releases/latest).
+
+The Docker image includes the PocketBook ARM toolchain and dependencies (libzip, libxml2).
+
+```bash
+# One-time — build the image (Apple Silicon: force amd64)
+docker build --platform linux/amd64 -t pb-rsvp-builder .
+
+# Compile
+docker run --rm --platform linux/amd64 -v "$(pwd):/project" pb-rsvp-builder \
+  -c 'mkdir -p build && cd build && cmake -DCMAKE_TOOLCHAIN_FILE=/SDK/share/cmake/arm_conf.cmake .. && cmake --build .'
+```
+
+Output: `build/rsvp.app` (binary filename; the app displays as **RSVP Reader** in the UI).
 
 ## Host tests (optional)
 
