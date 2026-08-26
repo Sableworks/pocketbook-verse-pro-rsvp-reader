@@ -6,11 +6,13 @@ The on-device UI is in Polish; this README is in English for GitHub.
 
 ## Download
 
-**[Download the latest release (`rsvp.app`)](https://github.com/Sableworks/pocketbook-verse-pro-rsvp-reader/releases/latest)** — ready to copy onto your PocketBook. No build tools required.
+**[Download the latest release](https://github.com/Sableworks/pocketbook-verse-pro-rsvp-reader/releases/latest)** — ZIP with `rsvp.app`, ready for your PocketBook. No build tools required.
+
+(GitHub does not allow uploading bare `.app` files, so the binary ships inside a ZIP.)
 
 ## Install on device
 
-1. Download `rsvp.app` from the [latest release](https://github.com/Sableworks/pocketbook-verse-pro-rsvp-reader/releases/latest).
+1. Download the ZIP from the [latest release](https://github.com/Sableworks/pocketbook-verse-pro-rsvp-reader/releases/latest) and unzip it to get `rsvp.app`.
 2. Connect the PocketBook via USB (PC Link / mass storage).
 3. Copy `rsvp.app` to `applications/` on device storage (`/mnt/ext1/applications/`).
 4. **Disconnect USB** (important — with PC Link active, apps often cannot see files).
