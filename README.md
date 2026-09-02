@@ -27,7 +27,7 @@ Reading progress and WPM are saved in `/mnt/ext1/.rsvp_saves.ini`.
 | Pause → options panel | Tap while playing |
 | Start / Resume | Tap “Start” / “Wznów” (or tap the word preview) |
 | Speed ±10 WPM | Swipe up/down (play or pause) or −10 / +10 in the panel (max **250 WPM**) |
-| Short-word grouping | Function words (prepositions, articles, conjunctions, pronouns) in **Polish, English, and German** are shown with the following word — e.g. „w tym domu”, „The quick”, „der Mann”. Content words (dom, spał, fox) stay separate |
+| Word grouping | Function words (PL/EN/DE prepositions, articles, etc.) show with the next word — fewer e-ink refreshes |
 | Chapters | “Rozdziały” row in the pause panel |
 | ±1 chapter / start of book | Navigation row in the pause panel |
 | Another book | “Inna książka” or **Back** |

@@ -20,6 +20,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 // RSVP
 #define RSVP_TIMER_NAME "rsvp_tick"
@@ -1867,7 +1868,8 @@ static int playback_delay_ms(int span, long long render_start_ms) {
   int target = unit_display_ms(span);
   int elapsed = (int)(now_ms() - render_start_ms);
   int wait = target - elapsed;
-  return wait > 0 ? wait : 0;
+  if (wait < 1) wait = 1; /* SetWeakTimer(0) is unreliable on InkView */
+  return wait;
 }
 
 static void stop_playback_timer(void) {
@@ -1896,6 +1898,7 @@ static void set_playing(int enable, int from_menu) {
   if (g.reader_menu == READER_MENU_CHAPTERS) return;
 
   if (enable) {
+    int shown_span;
     if (g.next_word_idx >= g.word_count && g.word_count > 0) {
       g.next_word_idx = 0;
     }
@@ -1906,8 +1909,14 @@ static void set_playing(int enable, int from_menu) {
     g.words_since_full = 0;
     ClearScreen();
     FullUpdate();
+    /* Delay until next frame must match the unit we just painted, not the next one. */
+    shown_span = unit_word_span(unit_start_idx(g.next_word_idx));
+    if (shown_span < 1) shown_span = 1;
     advance_and_render_one_word();
-    arm_playback_timer();
+    if (g.playing) {
+      SetWeakTimer(RSVP_TIMER_NAME, timer_proc, unit_display_ms(shown_span));
+      SetAutoPowerOff(0);
+    }
     return;
   }
 
