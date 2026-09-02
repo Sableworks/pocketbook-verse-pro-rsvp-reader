@@ -130,9 +130,11 @@ static int test_resolve(void) {
 static int test_unit_grouping(void) {
   const char *pl[] = {"Poszedł", "w", "tym", "domu", "i", "spał"};
   if (rsvp_unit_word_span(pl, 6, 0) != 1) return 1;
-  if (rsvp_unit_word_span(pl, 6, 1) != 3) return 1; /* w tym domu */
+  if (rsvp_unit_word_span(pl, 6, 1) != 2) return 1; /* w tym — max 2 */
+  if (rsvp_unit_word_span(pl, 6, 2) != 2) return 1; /* tym domu */
+  if (rsvp_unit_word_span(pl, 6, 3) != 1) return 1; /* domu solo when taken as start */
   if (rsvp_unit_word_span(pl, 6, 4) != 2) return 1; /* i spał */
-  if (rsvp_unit_word_span(pl, 6, 5) != 1) return 1; /* spał — czasownik solo */
+  if (rsvp_unit_word_span(pl, 6, 5) != 1) return 1;
 
   const char *en[] = {"The", "quick", "fox"};
   if (rsvp_unit_word_span(en, 3, 0) != 2) return 1; /* The quick */
@@ -147,7 +149,7 @@ static int test_unit_grouping(void) {
 
   const char *de[] = {"der", "Mann", "und", "die", "Katze"};
   if (rsvp_unit_word_span(de, 5, 0) != 2) return 1; /* der Mann */
-  if (rsvp_unit_word_span(de, 5, 2) != 3) return 1; /* und die Katze */
+  if (rsvp_unit_word_span(de, 5, 2) != 2) return 1; /* und die — max 2 */
   if (rsvp_unit_word_span(de, 5, 3) != 2) return 1; /* die Katze */
 
   const char *tail[] = {"dom", "i", "w"};

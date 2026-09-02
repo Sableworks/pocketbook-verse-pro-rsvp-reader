@@ -136,17 +136,11 @@ static int rsvp_is_glue_word(const char *word) {
   return 0;
 }
 
-/* Ile kolejnych słów tworzy jedną jednostkę wyświetlania (od idx). */
+/* Ile kolejnych słów tworzy jedną jednostkę wyświetlania (od idx). Max 2. */
 static int rsvp_unit_word_span(const char *const *words, int count, int idx) {
   if (idx < 0 || idx >= count) return 0;
-  if (!rsvp_is_glue_word(words[idx])) return 1;
-
-  {
-    int j = idx;
-    while (j < count && rsvp_is_glue_word(words[j])) j++;
-    if (j < count) return j - idx + 1;
-    return count - idx;
-  }
+  if (rsvp_is_glue_word(words[idx]) && idx + 1 < count) return 2;
+  return 1;
 }
 
 #endif /* RSVP_GLUE_H */

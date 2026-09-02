@@ -74,8 +74,8 @@ enum {
 #define UNIT_TEXT_MAX 384
 #define CHAPTER_MAX 256
 
-/* Pełne odświeżenie e-ink co N słów podczas odtwarzania (mniej ghostingu) */
-#define FULL_REFRESH_EVERY 60
+/* Soft refresh during play — FullUpdate caused multi-second freezes („ścinki”). */
+#define FULL_REFRESH_EVERY 100
 #define WPM_BADGE_MS 2500
 #define WPM_BADGE_TIMER "wpm_badge"
 #define INI_KEY_WPM "wpm"
@@ -1304,26 +1304,18 @@ static int reader_content_bottom(void) {
 
 static int unit_word_span(int idx) {
   if (idx < 0 || idx >= g.word_count) return 0;
-  if (!rsvp_is_glue_word(g.words[idx].word)) return 1;
-
-  {
-    int j = idx;
-    while (j < g.word_count && rsvp_is_glue_word(g.words[j].word)) j++;
-    if (j < g.word_count) return j - idx + 1;
-    return g.word_count - idx;
-  }
+  /* Max 2 words: one function word + the next (never „w tym domu” as one frame). */
+  if (rsvp_is_glue_word(g.words[idx].word) && idx + 1 < g.word_count) return 2;
+  return 1;
 }
 
 static int unit_start_idx(int idx) {
   if (idx <= 0) return 0;
   if (idx >= g.word_count) return g.word_count;
-  if (rsvp_is_glue_word(g.words[idx].word)) {
-    while (idx > 0 && rsvp_is_glue_word(g.words[idx - 1].word)) idx--;
-    return idx;
-  }
+  /* Pull back at most one glue so we land on a max-2 unit start. */
   if (rsvp_is_glue_word(g.words[idx - 1].word)) {
-    while (idx > 0 && rsvp_is_glue_word(g.words[idx - 1].word)) idx--;
-    return idx;
+    if (idx >= 2 && rsvp_is_glue_word(g.words[idx - 2].word)) return idx;
+    return idx - 1;
   }
   return idx;
 }
@@ -1852,9 +1844,9 @@ static int ms_per_word(void) {
 }
 
 static int unit_display_ms(int span) {
-  int target;
-  if (span < 1) span = 1;
-  target = ms_per_word() * span;
+  int target = ms_per_word();
+  /* Second word in a pair gets half a slot — full ×span felt like freezes („ścinki”). */
+  if (span > 1) target += ms_per_word() / 2;
   if (target < EINK_MIN_WORD_MS) target = EINK_MIN_WORD_MS;
   return target;
 }
@@ -1945,10 +1937,10 @@ static void advance_and_render_one_word(void) {
   g_play_ticks++;
   g.words_since_full++;
 
-  /* Okresowe pełne odświeżenie — mniej ghostingu na B300 */
+  /* Okresowe miękkie odświeżenie — FullUpdate zawieszał odtwarzanie na sekundy */
   if (g.playing && g.words_since_full >= FULL_REFRESH_EVERY) {
     g.words_since_full = 0;
-    FullUpdate();
+    SoftUpdate();
   }
 
   if (g.next_word_idx >= g.word_count) {
@@ -2296,6 +2288,28 @@ static void browse_clamp_sel(void) {
   }
   if (g.browse_sel < 0) g.browse_sel = 0;
   if (g.browse_sel >= g_browse_count) g.browse_sel = g_browse_count - 1;
+}
+
+static void browse_clamp_scroll(void) {
+  int rows = browse_visible_rows();
+  int maxs = 0;
+  if (g_browse_count > rows) maxs = g_browse_count - rows;
+  if (g.browse_scroll < 0) g.browse_scroll = 0;
+  if (g.browse_scroll > maxs) g.browse_scroll = maxs;
+}
+
+static void browse_scroll_by(int row_delta) {
+  if (row_delta == 0) return;
+  g.browse_scroll += row_delta;
+  browse_clamp_scroll();
+  /* Keep selection on-screen after a finger scroll. */
+  {
+    int rows = browse_visible_rows();
+    if (g.browse_sel < g.browse_scroll) g.browse_sel = g.browse_scroll;
+    if (g.browse_sel >= g.browse_scroll + rows)
+      g.browse_sel = g.browse_scroll + rows - 1;
+    browse_clamp_sel();
+  }
 }
 
 static void browse_ensure_sel_visible(void) {
@@ -2788,11 +2802,12 @@ static int main_handler(int type, int par1, int par2) {
     /* Eksplorator */
     if (g.browse_active && g.word_count <= 0) {
       int rows = browse_visible_rows();
-      if (abs(delta) >= 40) {
-        if (delta > 0) g.browse_sel -= (rows > 1 ? rows - 1 : 1);
-        else g.browse_sel += (rows > 1 ? rows - 1 : 1);
-        browse_clamp_sel();
-        browse_ensure_sel_visible();
+      /* Swipe up/down scrolls the list (natural: finger up → see items below). */
+      if (abs(delta) >= 24) {
+        int step = g.browse_row_h > 0 ? g.browse_row_h : BROWSE_ROW_H;
+        int row_delta = delta / step;
+        if (row_delta == 0) row_delta = (delta > 0) ? 1 : -1;
+        browse_scroll_by(row_delta);
         draw_browser();
         return 0;
       }
@@ -2818,11 +2833,20 @@ static int main_handler(int type, int par1, int par2) {
 
       if (g.reader_menu == READER_MENU_CHAPTERS) {
         int rows = chapter_list_rows();
-        if (abs(delta) >= 40) {
-          if (delta > 0) g.chapter_sel -= (rows > 1 ? rows - 1 : 1);
-          else g.chapter_sel += (rows > 1 ? rows - 1 : 1);
-          if (g.chapter_sel < 0) g.chapter_sel = 0;
-          if (g.chapter_sel >= g.chapter_count) g.chapter_sel = g.chapter_count - 1;
+        if (abs(delta) >= 24) {
+          int step = g.browse_row_h > 0 ? g.browse_row_h : BROWSE_ROW_H;
+          int row_delta = delta / step;
+          if (row_delta == 0) row_delta = (delta > 0) ? 1 : -1;
+          g.chapter_scroll += row_delta;
+          if (g.chapter_scroll < 0) g.chapter_scroll = 0;
+          {
+            int maxs = 0;
+            if (g.chapter_count > rows) maxs = g.chapter_count - rows;
+            if (g.chapter_scroll > maxs) g.chapter_scroll = maxs;
+          }
+          if (g.chapter_sel < g.chapter_scroll) g.chapter_sel = g.chapter_scroll;
+          if (g.chapter_sel >= g.chapter_scroll + rows)
+            g.chapter_sel = g.chapter_scroll + rows - 1;
           draw_chapter_picker();
           return 0;
         }
