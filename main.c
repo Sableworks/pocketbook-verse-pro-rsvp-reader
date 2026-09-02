@@ -1,4 +1,5 @@
 #include "inkview.h"
+#include "rsvp_glue.h"
 
 /* Starsze inkview.h nie definiują KEY_HOME — na nowszych firmware to 0x1a */
 #ifndef KEY_HOME
@@ -69,8 +70,7 @@ enum {
 /* B300 (Kaleido 3): PartialUpdate potrzebuje ~240 ms na czytelne słowo */
 #define EINK_MIN_WORD_MS 240
 #define WPM_MAX 250
-/* Krótkie słowa (przyimki, spójniki) łączone z następnym — mniej odświeżeń e-ink */
-#define SHORT_WORD_MAX_LETTERS 3
+/* Jednostki wyświetlania: słowa funkcyjne (rsvp_glue.h) łączone z następnym */
 #define UNIT_TEXT_MAX 384
 #define CHAPTER_MAX 256
 
@@ -1302,40 +1302,27 @@ static int reader_content_bottom(void) {
   return g.sh - pause_panel_h();
 }
 
-static int word_letter_count(const char *w) {
-  int n = 0;
-  if (!w) return 0;
-  for (; *w; w++) {
-    if (is_word_char((unsigned char)*w)) n++;
-  }
-  return n;
-}
-
-static int is_short_word(const char *w) {
-  int n = word_letter_count(w);
-  return n > 0 && n <= SHORT_WORD_MAX_LETTERS;
-}
-
-/* Ile kolejnych słów tworzy jedną jednostkę wyświetlania (od idx). */
 static int unit_word_span(int idx) {
   if (idx < 0 || idx >= g.word_count) return 0;
-  if (!is_short_word(g.words[idx].word)) return 1;
+  if (!rsvp_is_glue_word(g.words[idx].word)) return 1;
 
-  int j = idx;
-  while (j < g.word_count && is_short_word(g.words[j].word)) j++;
-  if (j < g.word_count) return j - idx + 1;
-  return g.word_count - idx;
+  {
+    int j = idx;
+    while (j < g.word_count && rsvp_is_glue_word(g.words[j].word)) j++;
+    if (j < g.word_count) return j - idx + 1;
+    return g.word_count - idx;
+  }
 }
 
 static int unit_start_idx(int idx) {
   if (idx <= 0) return 0;
   if (idx >= g.word_count) return g.word_count;
-  if (is_short_word(g.words[idx].word)) {
-    while (idx > 0 && is_short_word(g.words[idx - 1].word)) idx--;
+  if (rsvp_is_glue_word(g.words[idx].word)) {
+    while (idx > 0 && rsvp_is_glue_word(g.words[idx - 1].word)) idx--;
     return idx;
   }
-  if (is_short_word(g.words[idx - 1].word)) {
-    while (idx > 0 && is_short_word(g.words[idx - 1].word)) idx--;
+  if (rsvp_is_glue_word(g.words[idx - 1].word)) {
+    while (idx > 0 && rsvp_is_glue_word(g.words[idx - 1].word)) idx--;
     return idx;
   }
   return idx;
