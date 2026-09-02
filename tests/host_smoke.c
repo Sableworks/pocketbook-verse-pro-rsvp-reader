@@ -125,6 +125,45 @@ static int test_resolve(void) {
   return strcmp(out, "Text/ch1.xhtml") == 0 ? 0 : 1;
 }
 
+/* Lustracja logiki grupowania krótkich słów z main.c */
+static int smoke_word_letters(const char *w) {
+  int n = 0;
+  for (; *w; w++) {
+    unsigned char c = (unsigned char)*w;
+    if (isalnum(c) || c == '\'' || c == '-' || c >= 0x80) n++;
+  }
+  return n;
+}
+
+static int smoke_is_short(const char *w) {
+  int n = smoke_word_letters(w);
+  return n > 0 && n <= 3;
+}
+
+static int smoke_unit_span(const char **words, int count, int idx) {
+  if (idx < 0 || idx >= count) return 0;
+  if (!smoke_is_short(words[idx])) return 1;
+  int j = idx;
+  while (j < count && smoke_is_short(words[j])) j++;
+  if (j < count) return j - idx + 1;
+  return count - idx;
+}
+
+static int test_unit_grouping(void) {
+  const char *pl[] = {"Poszedł", "w", "tym", "domu", "i", "spał"};
+  if (smoke_unit_span(pl, 6, 0) != 1) return 1;
+  if (smoke_unit_span(pl, 6, 1) != 3) return 1; /* w tym domu */
+  if (smoke_unit_span(pl, 6, 4) != 2) return 1; /* i spał */
+  const char *en[] = {"The", "quick", "fox"};
+  if (smoke_unit_span(en, 3, 0) != 2) return 1; /* The quick */
+  if (smoke_unit_span(en, 3, 2) != 1) return 1;
+  const char *tail[] = {"dom", "i", "w"};
+  if (smoke_unit_span(tail, 3, 1) != 2) return 1; /* i w (koniec tekstu) */
+  const char *all_short[] = {"w", "tym", "razem"};
+  if (smoke_unit_span(all_short, 3, 0) != 3) return 1;
+  return 0;
+}
+
 int main(void) {
   int fail = 0;
   if (test_strip()) {
@@ -137,6 +176,10 @@ int main(void) {
   }
   if (test_resolve()) {
     fprintf(stderr, "FAIL resolve\n");
+    fail++;
+  }
+  if (test_unit_grouping()) {
+    fprintf(stderr, "FAIL unit_grouping\n");
     fail++;
   }
   if (fail) {
