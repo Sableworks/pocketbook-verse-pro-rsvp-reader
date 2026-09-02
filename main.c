@@ -1,4 +1,5 @@
 #include "inkview.h"
+#include "rsvp_glue.h"
 
 /* Starsze inkview.h nie definiują KEY_HOME — na nowszych firmware to 0x1a */
 #ifndef KEY_HOME
@@ -19,6 +20,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 // RSVP
 #define RSVP_TIMER_NAME "rsvp_tick"
@@ -66,8 +68,11 @@ enum {
 #define WPM_STEP 10
 #define WPM_SWIPE_STEP 10
 #define WPM_MIN 30
-#define WPM_MAX 800
-#define SKIP_WORDS 15
+/* B300 (Kaleido 3): PartialUpdate potrzebuje ~240 ms na czytelne słowo */
+#define EINK_MIN_WORD_MS 240
+#define WPM_MAX 250
+/* Jednostki wyświetlania: słowa funkcyjne (rsvp_glue.h) łączone z następnym */
+#define UNIT_TEXT_MAX 384
 #define CHAPTER_MAX 256
 
 /* Pełne odświeżenie e-ink co N słów podczas odtwarzania (mniej ghostingu) */
@@ -1298,6 +1303,47 @@ static int reader_content_bottom(void) {
   return g.sh - pause_panel_h();
 }
 
+static int unit_word_span(int idx) {
+  if (idx < 0 || idx >= g.word_count) return 0;
+  if (!rsvp_is_glue_word(g.words[idx].word)) return 1;
+
+  {
+    int j = idx;
+    while (j < g.word_count && rsvp_is_glue_word(g.words[j].word)) j++;
+    if (j < g.word_count) return j - idx + 1;
+    return g.word_count - idx;
+  }
+}
+
+static int unit_start_idx(int idx) {
+  if (idx <= 0) return 0;
+  if (idx >= g.word_count) return g.word_count;
+  if (rsvp_is_glue_word(g.words[idx].word)) {
+    while (idx > 0 && rsvp_is_glue_word(g.words[idx - 1].word)) idx--;
+    return idx;
+  }
+  if (rsvp_is_glue_word(g.words[idx - 1].word)) {
+    while (idx > 0 && rsvp_is_glue_word(g.words[idx - 1].word)) idx--;
+    return idx;
+  }
+  return idx;
+}
+
+static void format_unit_text(int idx, char *out, size_t outsz) {
+  int span = unit_word_span(idx);
+  size_t used = 0;
+  out[0] = '\0';
+  if (span <= 0 || outsz == 0) return;
+
+  for (int k = 0; k < span; k++) {
+    const char *part = g.words[idx + k].word;
+    if (!part) continue;
+    if (k > 0 && used + 1 < outsz) out[used++] = ' ';
+    while (*part && used + 1 < outsz) out[used++] = *part++;
+  }
+  out[used] = '\0';
+}
+
 static int get_preview_idx(void) {
   if (g.word_count <= 0) return 0;
   if (g.next_word_idx >= g.word_count) return g.word_count - 1;
@@ -1506,9 +1552,15 @@ static void render_word_at_idx(int word_idx) {
   if (g.word_count <= 0) return;
   if (word_idx < 0) word_idx = 0;
   if (word_idx >= g.word_count) word_idx = g.word_count - 1;
+  word_idx = unit_start_idx(word_idx);
 
-  const char *word = g.words[word_idx].word;
-  if (!word) return;
+  char unit_text[UNIT_TEXT_MAX];
+  format_unit_text(word_idx, unit_text, sizeof(unit_text));
+  if (!unit_text[0]) return;
+
+  int span = unit_word_span(word_idx);
+  int orp_idx = word_idx + span - 1;
+  if (orp_idx >= g.word_count) orp_idx = g.word_count - 1;
 
   int ctop = reader_content_top();
   int cbot = reader_content_bottom();
@@ -1518,17 +1570,32 @@ static void render_word_at_idx(int word_idx) {
   FillArea(0, ctop, g.sw, content_h, WHITE);
 
   if (g.font_word) SetFont(g.font_word, BLACK);
-  int w = g.words[word_idx].width_px;
-  if (w <= 0 && g.font_word) w = StringWidth((char *)word);
 
-  int orp_off = (w * ORP_RATIO_NUM) / ORP_RATIO_DEN;
+  char prefix[UNIT_TEXT_MAX];
+  size_t used = 0;
+  prefix[0] = '\0';
+  for (int k = word_idx; k < orp_idx; k++) {
+    const char *part = g.words[k].word;
+    if (!part) continue;
+    if (k > word_idx && used + 1 < sizeof(prefix)) prefix[used++] = ' ';
+    while (*part && used + 1 < sizeof(prefix)) prefix[used++] = *part++;
+  }
+  if (orp_idx > word_idx && used + 1 < sizeof(prefix)) prefix[used++] = ' ';
+  prefix[used] = '\0';
+
+  const char *orp_word = g.words[orp_idx].word;
+  int prefix_w = prefix[0] && g.font_word ? StringWidth(prefix) : 0;
+  int orp_w = g.words[orp_idx].width_px;
+  if (orp_w <= 0 && g.font_word && orp_word) orp_w = StringWidth((char *)orp_word);
+
+  int orp_off = (orp_w * ORP_RATIO_NUM) / ORP_RATIO_DEN;
   int cx = g.sw / 2;
-  int x = cx - orp_off;
+  int x = cx - prefix_w - orp_off;
   int y = ctop + (content_h / 2) - (g.word_text_h / 2);
   if (y < ctop + 8) y = ctop + 8;
 
   draw_orp_guides(cx, y, g.word_text_h);
-  DrawString(x, y, word);
+  DrawString(x, y, unit_text);
 
   g.display_word_idx = word_idx;
   g.last_rect_x = 0;
@@ -1593,7 +1660,7 @@ static void jump_to_chapter(int chap_idx) {
     g.playing = 0;
     stop_playback_timer();
   }
-  g.next_word_idx = g.chapters[chap_idx].word_idx;
+  g.next_word_idx = unit_start_idx(g.chapters[chap_idx].word_idx);
   if (g.next_word_idx < 0) g.next_word_idx = 0;
   if (g.next_word_idx > g.word_count) g.next_word_idx = g.word_count;
   g.reader_menu = READER_MENU_NONE;
@@ -1778,12 +1845,31 @@ static void show_wpm_badge(void) {
 static void timer_proc(void);
 static int g_play_ticks;
 
-static int wpm_to_ms(void) {
+static long long now_ms(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (long long)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+}
+
+static int ms_per_word(void) {
   int wpm = g.wpm > 0 ? g.wpm : WPM_DEFAULT;
-  int ms = 60000 / wpm;
-  /* Minimum ~50ms — e-ink i tak nie nadąży szybciej */
-  if (ms < 50) ms = 50;
-  return ms;
+  return 60000 / wpm;
+}
+
+static int unit_display_ms(int span) {
+  int target;
+  if (span < 1) span = 1;
+  target = ms_per_word() * span;
+  if (target < EINK_MIN_WORD_MS) target = EINK_MIN_WORD_MS;
+  return target;
+}
+
+static int playback_delay_ms(int span, long long render_start_ms) {
+  int target = unit_display_ms(span);
+  int elapsed = (int)(now_ms() - render_start_ms);
+  int wait = target - elapsed;
+  if (wait < 1) wait = 1; /* SetWeakTimer(0) is unreliable on InkView */
+  return wait;
 }
 
 static void stop_playback_timer(void) {
@@ -1791,8 +1877,9 @@ static void stop_playback_timer(void) {
 }
 
 static void arm_playback_timer(void) {
+  int span = unit_word_span(g.next_word_idx);
   /* SetWeakTimer: jak w CoolReader — one-shot, przeładowywany w callbacku */
-  SetWeakTimer(RSVP_TIMER_NAME, timer_proc, wpm_to_ms());
+  SetWeakTimer(RSVP_TIMER_NAME, timer_proc, unit_display_ms(span));
   SetAutoPowerOff(0); /* nie usypiaj podczas czytania */
 }
 
@@ -1811,6 +1898,7 @@ static void set_playing(int enable, int from_menu) {
   if (g.reader_menu == READER_MENU_CHAPTERS) return;
 
   if (enable) {
+    int shown_span;
     if (g.next_word_idx >= g.word_count && g.word_count > 0) {
       g.next_word_idx = 0;
     }
@@ -1821,8 +1909,14 @@ static void set_playing(int enable, int from_menu) {
     g.words_since_full = 0;
     ClearScreen();
     FullUpdate();
+    /* Delay until next frame must match the unit we just painted, not the next one. */
+    shown_span = unit_word_span(unit_start_idx(g.next_word_idx));
+    if (shown_span < 1) shown_span = 1;
     advance_and_render_one_word();
-    arm_playback_timer();
+    if (g.playing) {
+      SetWeakTimer(RSVP_TIMER_NAME, timer_proc, unit_display_ms(shown_span));
+      SetAutoPowerOff(0);
+    }
     return;
   }
 
@@ -1847,9 +1941,12 @@ static void advance_and_render_one_word(void) {
     return;
   }
 
-  int idx = g.next_word_idx;
+  int idx = unit_start_idx(g.next_word_idx);
+  int span = unit_word_span(idx);
+  if (span < 1) span = 1;
+
   render_word_at_idx(idx);
-  g.next_word_idx++;
+  g.next_word_idx = idx + span;
   g_play_ticks++;
   g.words_since_full++;
 
@@ -1870,27 +1967,19 @@ static void advance_and_render_one_word(void) {
 }
 
 static void timer_proc(void) {
+  long long render_start;
+  int span;
+
   if (!g.playing || g.reader_menu || g.browse_active || g.word_count <= 0) {
     return;
   }
+  span = unit_word_span(g.next_word_idx);
+  if (span < 1) span = 1;
+  render_start = now_ms();
   advance_and_render_one_word();
   if (g.playing) {
-    SetWeakTimer(RSVP_TIMER_NAME, timer_proc, wpm_to_ms());
+    SetWeakTimer(RSVP_TIMER_NAME, timer_proc, playback_delay_ms(span, render_start));
   }
-}
-
-static void reader_skip_words(int delta) {
-  if (g.word_count <= 0) return;
-  if (g.playing) {
-    g.playing = 0;
-    stop_playback_timer();
-  }
-  g.next_word_idx += delta;
-  if (g.next_word_idx < 0) g.next_word_idx = 0;
-  if (g.next_word_idx > g.word_count) g.next_word_idx = g.word_count;
-  g.chrome_visible = 1;
-  save_progress();
-  render_reader_full();
 }
 
 // Progress persistence: ~/.rsvp_saves.ini (na PocketBooku w FLASHDIR)
@@ -1953,7 +2042,7 @@ static void load_progress_and_set_next_index(void) {
       int idx = atoi(val);
       if (idx < 0) idx = 0;
       if (idx >= g.word_count) idx = g.word_count - 1;
-      g.next_word_idx = idx;
+      g.next_word_idx = unit_start_idx(idx);
       break;
     }
   }
@@ -2984,14 +3073,6 @@ static int main_handler(int type, int par1, int par2) {
         return 0;
       }
 
-      if (key == KEY_PREV || key == KEY_PREV2) {
-        reader_skip_words(-SKIP_WORDS);
-        return 0;
-      }
-      if (key == KEY_NEXT || key == KEY_NEXT2) {
-        reader_skip_words(+SKIP_WORDS);
-        return 0;
-      }
       if (key == KEY_OK) {
         if (g.playing) show_reader_chrome();
         else set_playing(1, 0);
