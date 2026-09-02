@@ -1596,52 +1596,16 @@ static void render_word_at_idx(int word_idx) {
   draw_orp_guides(cx, y, g.word_text_h);
   DrawString(x, y, unit_text);
 
-  /* Update only old∪new word region so the previous word is cleared on-panel
-   * without refreshing the whole content band (faster → less frame drop). */
-  {
-    int total_w = g.font_word ? StringWidth(unit_text) : (prefix_w + orp_w);
-    int pad_x = 28;
-    int top = y - 28;
-    int bot = y + g.word_text_h + 16;
-    int nx, ny, nw, nh;
-    int ux, uy, uw, uh;
+  g.display_word_idx = word_idx;
+  g.last_rect_x = 0;
+  g.last_rect_y = ctop;
+  g.last_rect_w = g.sw;
+  g.last_rect_h = content_h;
+  g.rect_valid = 1;
 
-    if (top < ctop + 8) top = ctop + 8;
-    if (bot > cbot - 8) bot = cbot - 8;
-    nx = x - pad_x;
-    if (nx < 0) nx = 0;
-    nw = total_w + 2 * pad_x;
-    if (nx + nw > g.sw) nw = g.sw - nx;
-    ny = top;
-    nh = bot - top;
-    if (nh < g.word_text_h) nh = g.word_text_h;
-
-    ux = nx;
-    uy = ny;
-    uw = nw;
-    uh = nh;
-    if (g.rect_valid) {
-      int x2 = nx + nw;
-      int y2 = ny + nh;
-      int ox2 = g.last_rect_x + g.last_rect_w;
-      int oy2 = g.last_rect_y + g.last_rect_h;
-      if (g.last_rect_x < ux) ux = g.last_rect_x;
-      if (g.last_rect_y < uy) uy = g.last_rect_y;
-      if (ox2 > x2) x2 = ox2;
-      if (oy2 > y2) y2 = oy2;
-      uw = x2 - ux;
-      uh = y2 - uy;
-    }
-
-    g.display_word_idx = word_idx;
-    g.last_rect_x = nx;
-    g.last_rect_y = ny;
-    g.last_rect_w = nw;
-    g.last_rect_h = nh;
-    g.rect_valid = 1;
-
-    PartialUpdate(ux, uy, uw, uh);
-  }
+  /* Full content band — tiny PartialUpdate on Kaleido 3 leaves previous ink
+   * (words stacked on top of each other). FillArea already cleared the FB. */
+  PartialUpdate(0, ctop, g.sw, content_h);
 }
 
 static void render_word_at_preview(void) {
