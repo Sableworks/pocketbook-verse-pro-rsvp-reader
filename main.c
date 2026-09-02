@@ -66,8 +66,9 @@ enum {
 #define WPM_STEP 10
 #define WPM_SWIPE_STEP 10
 #define WPM_MIN 30
-#define WPM_MAX 800
-#define SKIP_WORDS 15
+/* B300 (Kaleido 3): PartialUpdate potrzebuje ~240 ms na czytelne słowo */
+#define EINK_MIN_WORD_MS 240
+#define WPM_MAX 250
 #define CHAPTER_MAX 256
 
 /* Pełne odświeżenie e-ink co N słów podczas odtwarzania (mniej ghostingu) */
@@ -1778,12 +1779,24 @@ static void show_wpm_badge(void) {
 static void timer_proc(void);
 static int g_play_ticks;
 
+static long long now_ms(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (long long)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+}
+
 static int wpm_to_ms(void) {
   int wpm = g.wpm > 0 ? g.wpm : WPM_DEFAULT;
   int ms = 60000 / wpm;
-  /* Minimum ~50ms — e-ink i tak nie nadąży szybciej */
-  if (ms < 50) ms = 50;
+  if (ms < EINK_MIN_WORD_MS) ms = EINK_MIN_WORD_MS;
   return ms;
+}
+
+static int playback_delay_after_render(long long render_start_ms) {
+  int target = wpm_to_ms();
+  int elapsed = (int)(now_ms() - render_start_ms);
+  int wait = target - elapsed;
+  return wait > 0 ? wait : 0;
 }
 
 static void stop_playback_timer(void) {
@@ -1870,27 +1883,16 @@ static void advance_and_render_one_word(void) {
 }
 
 static void timer_proc(void) {
+  long long render_start;
+
   if (!g.playing || g.reader_menu || g.browse_active || g.word_count <= 0) {
     return;
   }
+  render_start = now_ms();
   advance_and_render_one_word();
   if (g.playing) {
-    SetWeakTimer(RSVP_TIMER_NAME, timer_proc, wpm_to_ms());
+    SetWeakTimer(RSVP_TIMER_NAME, timer_proc, playback_delay_after_render(render_start));
   }
-}
-
-static void reader_skip_words(int delta) {
-  if (g.word_count <= 0) return;
-  if (g.playing) {
-    g.playing = 0;
-    stop_playback_timer();
-  }
-  g.next_word_idx += delta;
-  if (g.next_word_idx < 0) g.next_word_idx = 0;
-  if (g.next_word_idx > g.word_count) g.next_word_idx = g.word_count;
-  g.chrome_visible = 1;
-  save_progress();
-  render_reader_full();
 }
 
 // Progress persistence: ~/.rsvp_saves.ini (na PocketBooku w FLASHDIR)
@@ -2984,14 +2986,6 @@ static int main_handler(int type, int par1, int par2) {
         return 0;
       }
 
-      if (key == KEY_PREV || key == KEY_PREV2) {
-        reader_skip_words(-SKIP_WORDS);
-        return 0;
-      }
-      if (key == KEY_NEXT || key == KEY_NEXT2) {
-        reader_skip_words(+SKIP_WORDS);
-        return 0;
-      }
       if (key == KEY_OK) {
         if (g.playing) show_reader_chrome();
         else set_playing(1, 0);
