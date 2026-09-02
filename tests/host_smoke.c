@@ -1,8 +1,6 @@
 /* Lekki test hosta: strip HTML + round-trip INI (bez InkView / libzip).
  *   cc -O2 -Wall -o tests/host_smoke tests/host_smoke.c && ./tests/host_smoke
  */
-#include "../rsvp_glue.h"
-
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,7 +53,6 @@ static int test_strip(void) {
   return ok ? 0 : 1;
 }
 
-/* Uproszczony zapis/odczyt jak .rsvp_saves.ini */
 static int test_ini(void) {
   const char *path = "tests/_smoke_saves.ini";
   FILE *f = fopen(path, "w");
@@ -83,7 +80,6 @@ static int test_ini(void) {
   return (wpm == 250 && idx == 42) ? 0 : 1;
 }
 
-/* Resolve ścieżki EPUB (uproszczenie ../ i #fragment) */
 static void resolve_href(const char *base, const char *href, char *out, size_t outsz) {
   char tmp[256];
   const char *hash = strchr(href, '#');
@@ -127,44 +123,6 @@ static int test_resolve(void) {
   return strcmp(out, "Text/ch1.xhtml") == 0 ? 0 : 1;
 }
 
-static int test_unit_grouping(void) {
-  const char *pl[] = {"Poszedł", "w", "tym", "domu", "i", "spał"};
-  if (rsvp_unit_word_span(pl, 6, 0) != 1) return 1;
-  if (rsvp_unit_word_span(pl, 6, 1) != 2) return 1; /* w tym — max 2 */
-  if (rsvp_unit_word_span(pl, 6, 2) != 2) return 1; /* tym domu */
-  if (rsvp_unit_word_span(pl, 6, 3) != 1) return 1; /* domu solo when taken as start */
-  if (rsvp_unit_word_span(pl, 6, 4) != 2) return 1; /* i spał */
-  if (rsvp_unit_word_span(pl, 6, 5) != 1) return 1;
-
-  const char *en[] = {"The", "quick", "fox"};
-  if (rsvp_unit_word_span(en, 3, 0) != 2) return 1; /* The quick */
-  if (rsvp_unit_word_span(en, 3, 2) != 1) return 1;
-
-  const char *nouns[] = {"dom", "kot", "sen"};
-  if (rsvp_unit_word_span(nouns, 3, 0) != 1) return 1;
-  if (rsvp_unit_word_span(nouns, 3, 1) != 1) return 1;
-
-  const char *verbs[] = {"ma", "dom"};
-  if (rsvp_unit_word_span(verbs, 2, 0) != 1) return 1; /* ma — nie łączyć */
-
-  const char *de[] = {"der", "Mann", "und", "die", "Katze"};
-  if (rsvp_unit_word_span(de, 5, 0) != 2) return 1; /* der Mann */
-  if (rsvp_unit_word_span(de, 5, 2) != 2) return 1; /* und die — max 2 */
-  if (rsvp_unit_word_span(de, 5, 3) != 2) return 1; /* die Katze */
-
-  const char *tail[] = {"dom", "i", "w"};
-  if (rsvp_unit_word_span(tail, 3, 0) != 1) return 1;
-  if (rsvp_unit_word_span(tail, 3, 1) != 2) return 1; /* i w */
-
-  if (!rsvp_is_glue_word("W")) return 1;
-  if (!rsvp_is_glue_word("The")) return 1;
-  if (!rsvp_is_glue_word("Der")) return 1;
-  if (rsvp_is_glue_word("dom")) return 1;
-  if (rsvp_is_glue_word("spał")) return 1;
-
-  return 0;
-}
-
 int main(void) {
   int fail = 0;
   if (test_strip()) {
@@ -177,10 +135,6 @@ int main(void) {
   }
   if (test_resolve()) {
     fprintf(stderr, "FAIL resolve\n");
-    fail++;
-  }
-  if (test_unit_grouping()) {
-    fprintf(stderr, "FAIL unit_grouping\n");
     fail++;
   }
   if (fail) {

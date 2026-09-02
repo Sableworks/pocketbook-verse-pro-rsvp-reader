@@ -1,5 +1,4 @@
 #include "inkview.h"
-#include "rsvp_glue.h"
 
 /* Starsze inkview.h nie definiują KEY_HOME — na nowszych firmware to 0x1a */
 #ifndef KEY_HOME
@@ -62,20 +61,15 @@ enum {
   PAUSE_OPT_LEAVE = 4
 };
 
-// WPM (słowa/min) — zero-skip > speed on Kaleido 3 color e-ink
+// WPM (słowa/min) — prosty timer jak v1.0 (bez grupowania / twardego flooru e-ink)
 #define WPM_DEFAULT 180
 #define WPM_STEP 10
 #define WPM_SWIPE_STEP 10
 #define WPM_MIN 30
-/* Hard floor after each painted frame (panel must finish before next word). */
-#define EINK_MIN_WORD_MS 320
 #define WPM_MAX 200
-/* Jednostki wyświetlania: słowa funkcyjne (rsvp_glue.h) łączone z następnym */
-#define UNIT_TEXT_MAX 384
 #define CHAPTER_MAX 256
 
-/* Soft refresh during play — FullUpdate caused multi-second freezes („ścinki”). */
-#define FULL_REFRESH_EVERY 100
+/* Wyłączone: okresowy Full/SoftUpdate w play powodował „ścinki”. */
 #define WPM_BADGE_MS 2500
 #define WPM_BADGE_TIMER "wpm_badge"
 #define INI_KEY_WPM "wpm"
@@ -1302,39 +1296,6 @@ static int reader_content_bottom(void) {
   return g.sh - pause_panel_h();
 }
 
-static int unit_word_span(int idx) {
-  if (idx < 0 || idx >= g.word_count) return 0;
-  /* Max 2 words: one function word + the next (never „w tym domu” as one frame). */
-  if (rsvp_is_glue_word(g.words[idx].word) && idx + 1 < g.word_count) return 2;
-  return 1;
-}
-
-static int unit_start_idx(int idx) {
-  if (idx <= 0) return 0;
-  if (idx >= g.word_count) return g.word_count;
-  /* Pull back at most one glue so we land on a max-2 unit start. */
-  if (rsvp_is_glue_word(g.words[idx - 1].word)) {
-    if (idx >= 2 && rsvp_is_glue_word(g.words[idx - 2].word)) return idx;
-    return idx - 1;
-  }
-  return idx;
-}
-
-static void format_unit_text(int idx, char *out, size_t outsz) {
-  int span = unit_word_span(idx);
-  size_t used = 0;
-  out[0] = '\0';
-  if (span <= 0 || outsz == 0) return;
-
-  for (int k = 0; k < span; k++) {
-    const char *part = g.words[idx + k].word;
-    if (!part) continue;
-    if (k > 0 && used + 1 < outsz) out[used++] = ' ';
-    while (*part && used + 1 < outsz) out[used++] = *part++;
-  }
-  out[used] = '\0';
-}
-
 static int get_preview_idx(void) {
   if (g.word_count <= 0) return 0;
   if (g.next_word_idx >= g.word_count) return g.word_count - 1;
@@ -1543,15 +1504,9 @@ static void render_word_at_idx(int word_idx) {
   if (g.word_count <= 0) return;
   if (word_idx < 0) word_idx = 0;
   if (word_idx >= g.word_count) word_idx = g.word_count - 1;
-  word_idx = unit_start_idx(word_idx);
 
-  char unit_text[UNIT_TEXT_MAX];
-  format_unit_text(word_idx, unit_text, sizeof(unit_text));
-  if (!unit_text[0]) return;
-
-  int span = unit_word_span(word_idx);
-  int orp_idx = word_idx + span - 1;
-  if (orp_idx >= g.word_count) orp_idx = g.word_count - 1;
+  const char *word = g.words[word_idx].word;
+  if (!word) return;
 
   int ctop = reader_content_top();
   int cbot = reader_content_bottom();
@@ -1561,32 +1516,17 @@ static void render_word_at_idx(int word_idx) {
   FillArea(0, ctop, g.sw, content_h, WHITE);
 
   if (g.font_word) SetFont(g.font_word, BLACK);
+  int w = g.words[word_idx].width_px;
+  if (w <= 0 && g.font_word) w = StringWidth((char *)word);
 
-  char prefix[UNIT_TEXT_MAX];
-  size_t used = 0;
-  prefix[0] = '\0';
-  for (int k = word_idx; k < orp_idx; k++) {
-    const char *part = g.words[k].word;
-    if (!part) continue;
-    if (k > word_idx && used + 1 < sizeof(prefix)) prefix[used++] = ' ';
-    while (*part && used + 1 < sizeof(prefix)) prefix[used++] = *part++;
-  }
-  if (orp_idx > word_idx && used + 1 < sizeof(prefix)) prefix[used++] = ' ';
-  prefix[used] = '\0';
-
-  const char *orp_word = g.words[orp_idx].word;
-  int prefix_w = prefix[0] && g.font_word ? StringWidth(prefix) : 0;
-  int orp_w = g.words[orp_idx].width_px;
-  if (orp_w <= 0 && g.font_word && orp_word) orp_w = StringWidth((char *)orp_word);
-
-  int orp_off = (orp_w * ORP_RATIO_NUM) / ORP_RATIO_DEN;
+  int orp_off = (w * ORP_RATIO_NUM) / ORP_RATIO_DEN;
   int cx = g.sw / 2;
-  int x = cx - prefix_w - orp_off;
+  int x = cx - orp_off;
   int y = ctop + (content_h / 2) - (g.word_text_h / 2);
   if (y < ctop + 8) y = ctop + 8;
 
   draw_orp_guides(cx, y, g.word_text_h);
-  DrawString(x, y, unit_text);
+  DrawString(x, y, word);
 
   g.display_word_idx = word_idx;
   g.last_rect_x = 0;
@@ -1595,8 +1535,6 @@ static void render_word_at_idx(int word_idx) {
   g.last_rect_h = content_h;
   g.rect_valid = 1;
 
-  /* Full content band — tiny PartialUpdate on Kaleido 3 leaves previous ink
-   * (words stacked on top of each other). FillArea already cleared the FB. */
   PartialUpdate(0, ctop, g.sw, content_h);
 }
 
@@ -1653,7 +1591,7 @@ static void jump_to_chapter(int chap_idx) {
     g.playing = 0;
     stop_playback_timer();
   }
-  g.next_word_idx = unit_start_idx(g.chapters[chap_idx].word_idx);
+  g.next_word_idx = g.chapters[chap_idx].word_idx;
   if (g.next_word_idx < 0) g.next_word_idx = 0;
   if (g.next_word_idx > g.word_count) g.next_word_idx = g.word_count;
   g.reader_menu = READER_MENU_NONE;
@@ -1838,25 +1776,12 @@ static void show_wpm_badge(void) {
 static void timer_proc(void);
 static int g_play_ticks;
 
-static int ms_per_word(void) {
+static int wpm_to_ms(void) {
   int wpm = g.wpm > 0 ? g.wpm : WPM_DEFAULT;
-  return 60000 / wpm;
-}
-
-static int unit_display_ms(int span) {
-  int target = ms_per_word();
-  /* Second word in a pair gets half a slot — full ×span felt like freezes („ścinki”). */
-  if (span > 1) target += ms_per_word() / 2;
-  if (target < EINK_MIN_WORD_MS) target = EINK_MIN_WORD_MS;
-  return target;
-}
-
-/* Schedule next frame AFTER paint. Do not subtract paint time — PartialUpdate
- * may return before the panel has finished, and any "credit" risks a visual skip. */
-static int playback_delay_ms(int span) {
-  int wait = unit_display_ms(span);
-  if (wait < 1) wait = 1;
-  return wait;
+  int ms = 60000 / wpm;
+  /* Jak v1.0 — bez twardego flooru e-ink (ten dawał „ścinki”). */
+  if (ms < 50) ms = 50;
+  return ms;
 }
 
 static void stop_playback_timer(void) {
@@ -1864,9 +1789,8 @@ static void stop_playback_timer(void) {
 }
 
 static void arm_playback_timer(void) {
-  int span = unit_word_span(g.next_word_idx);
   /* SetWeakTimer: jak w CoolReader — one-shot, przeładowywany w callbacku */
-  SetWeakTimer(RSVP_TIMER_NAME, timer_proc, playback_delay_ms(span));
+  SetWeakTimer(RSVP_TIMER_NAME, timer_proc, wpm_to_ms());
   SetAutoPowerOff(0); /* nie usypiaj podczas czytania */
 }
 
@@ -1885,7 +1809,6 @@ static void set_playing(int enable, int from_menu) {
   if (g.reader_menu == READER_MENU_CHAPTERS) return;
 
   if (enable) {
-    int shown_span;
     if (g.next_word_idx >= g.word_count && g.word_count > 0) {
       g.next_word_idx = 0;
     }
@@ -1896,14 +1819,8 @@ static void set_playing(int enable, int from_menu) {
     g.words_since_full = 0;
     ClearScreen();
     FullUpdate();
-    /* Delay until next frame must match the unit we just painted, not the next one. */
-    shown_span = unit_word_span(unit_start_idx(g.next_word_idx));
-    if (shown_span < 1) shown_span = 1;
     advance_and_render_one_word();
-    if (g.playing) {
-      SetWeakTimer(RSVP_TIMER_NAME, timer_proc, playback_delay_ms(shown_span));
-      SetAutoPowerOff(0);
-    }
+    if (g.playing) arm_playback_timer();
     return;
   }
 
@@ -1928,20 +1845,12 @@ static void advance_and_render_one_word(void) {
     return;
   }
 
-  int idx = unit_start_idx(g.next_word_idx);
-  int span = unit_word_span(idx);
-  if (span < 1) span = 1;
-
+  int idx = g.next_word_idx;
   render_word_at_idx(idx);
-  g.next_word_idx = idx + span;
+  g.next_word_idx++;
   g_play_ticks++;
   g.words_since_full++;
-
-  /* Okresowe miękkie odświeżenie — FullUpdate zawieszał odtwarzanie na sekundy */
-  if (g.playing && g.words_since_full >= FULL_REFRESH_EVERY) {
-    g.words_since_full = 0;
-    SoftUpdate();
-  }
+  /* No periodic Full/SoftUpdate during play — that froze RSVP on B300. */
 
   if (g.next_word_idx >= g.word_count) {
     g.playing = 0;
@@ -1954,17 +1863,12 @@ static void advance_and_render_one_word(void) {
 }
 
 static void timer_proc(void) {
-  int span;
-
   if (!g.playing || g.reader_menu || g.browse_active || g.word_count <= 0) {
     return;
   }
-  span = unit_word_span(g.next_word_idx);
-  if (span < 1) span = 1;
   advance_and_render_one_word();
   if (g.playing) {
-    /* Full interval after paint — never overlap the next word with this frame. */
-    SetWeakTimer(RSVP_TIMER_NAME, timer_proc, playback_delay_ms(span));
+    SetWeakTimer(RSVP_TIMER_NAME, timer_proc, wpm_to_ms());
   }
 }
 
@@ -2028,7 +1932,7 @@ static void load_progress_and_set_next_index(void) {
       int idx = atoi(val);
       if (idx < 0) idx = 0;
       if (idx >= g.word_count) idx = g.word_count - 1;
-      g.next_word_idx = unit_start_idx(idx);
+      g.next_word_idx = idx;
       break;
     }
   }

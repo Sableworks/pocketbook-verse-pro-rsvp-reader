@@ -27,7 +27,6 @@ Reading progress and WPM are saved in `/mnt/ext1/.rsvp_saves.ini`.
 | Pause → options panel | Tap while playing |
 | Start / Resume | Tap “Start” / “Wznów” (or tap the word preview) |
 | Speed ±10 WPM | Swipe up/down (play or pause) or −10 / +10 in the panel (max **200 WPM**; default 180) |
-| Word grouping | At most **2** words per frame (one function word + next). Never 3+. |
 | Chapters | “Rozdziały” row in the pause panel |
 | ±1 chapter / start of book | Navigation row in the pause panel |
 | Another book | “Inna książka” or **Back** |
