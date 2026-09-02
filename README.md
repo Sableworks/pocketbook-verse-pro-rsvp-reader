@@ -20,13 +20,26 @@ The on-device UI is in Polish; this README is in English for GitHub.
 
 Reading progress and WPM are saved in `/mnt/ext1/.rsvp_saves.ini`.
 
+## Reading speed (WPM)
+
+Color e-ink on the **Verse Pro Color (B300 / Kaleido 3)** limits how fast RSVP can go. Faster settings need a higher panel refresh than the device can deliver, which leads to freezes or skipped-looking frames.
+
+| | WPM |
+| --- | --- |
+| **Recommended** | **~150** — tested; smooth on B300 |
+| **Default** | **150** |
+| **Hard cap** | **200** (`WPM_MAX` in code) — UI will not go higher |
+| Practical range | about 120–180 |
+
+Swipe or the pause panel adjusts speed in steps of **±10**. Prefer staying near **150** unless you have verified a higher rate on your device.
+
 ## Controls
 
 | Action | Gesture / key |
 | --- | --- |
 | Pause → options panel | Tap while playing |
 | Start / Resume | Tap “Start” / “Wznów” (or tap the word preview) |
-| Speed ±10 WPM | Swipe up/down (play or pause) or −10 / +10 in the panel (max **200 WPM**; default 180) |
+| Speed ±10 WPM | Swipe up/down (play or pause) or −10 / +10 in the panel (**cap 200**, default **150**) |
 | Chapters | “Rozdziały” row in the pause panel |
 | ±1 chapter / start of book | Navigation row in the pause panel |
 | Another book | “Inna książka” or **Back** |

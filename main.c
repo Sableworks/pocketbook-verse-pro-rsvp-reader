@@ -62,11 +62,11 @@ enum {
 };
 
 // WPM (słowa/min) — prosty timer jak v1.0 (bez grupowania / twardego flooru e-ink)
-#define WPM_DEFAULT 180
+#define WPM_DEFAULT 150
 #define WPM_STEP 10
 #define WPM_SWIPE_STEP 10
 #define WPM_MIN 30
-#define WPM_MAX 200
+#define WPM_MAX 200 /* Kaleido 3: above ~200 WPM the panel cannot keep up */
 #define CHAPTER_MAX 256
 
 /* Wyłączone: okresowy Full/SoftUpdate w play powodował „ścinki”. */
