@@ -31,32 +31,32 @@
 
 // UI / rendering
 #define WORD_FONT_SIZE 48
-#define UI_FONT_SIZE 18
-#define BROWSE_FONT_SIZE 28
-#define BROWSE_TITLE_SIZE 24
-#define BROWSE_ROW_H 64
-#define BROWSE_HEADER_H 78
-#define BROWSE_FOOTER_H 44
+#define UI_FONT_SIZE 22
+#define BROWSE_FONT_SIZE 32
+#define BROWSE_TITLE_SIZE 28
+#define BROWSE_ROW_H 72
+#define BROWSE_HEADER_H 88
+#define BROWSE_FOOTER_H 48
 #define ORP_RATIO_NUM 35  // 0.35
 #define ORP_RATIO_DEN 100
 #define WORD_PAD_PX 10
-#define TOP_BAR_H 58
-#define CTRL_BAR_H 132
+#define TOP_BAR_H 64
+#define CTRL_BAR_H 160
 #define FOOTER_WORDS 5
 #define FOOTER_H_PX CTRL_BAR_H
 #define MENU_W_PX 300
 #define MENU_H_PX 220
 
-/* Panel opcji po pauzie: info postępu + lista akcji (e-ink, czytelne wiersze) */
-#define PAUSE_INFO_H 118
-#define PAUSE_ROW_H 54
+/* Pause panel: larger touch rows; leave room for word preview above */
+#define PAUSE_INFO_H 150
+#define PAUSE_ROW_H 72
 #define PAUSE_OPT_COUNT 5
 #define PAUSE_PANEL_H (PAUSE_INFO_H + PAUSE_OPT_COUNT * PAUSE_ROW_H)
 
 enum {
   PAUSE_OPT_PLAY = 0,
   PAUSE_OPT_CHAPTERS = 1,
-  PAUSE_OPT_NAV = 2, /* « rozdz. | początek | rozdz. » */
+  PAUSE_OPT_NAV = 2, /* « ch. | Start | ch. » */
   PAUSE_OPT_WPM = 3,
   PAUSE_OPT_LEAVE = 4
 };
@@ -77,7 +77,7 @@ enum {
 
 // File dialog defaults
 #define EPUB_EXT ".epub"
-#define FILE_DIALOG_TITLE APP_DISPLAY_NAME ": wybierz EPUB"
+#define FILE_DIALOG_TITLE APP_DISPLAY_NAME ": choose EPUB"
 
 // Save file
 #define SAVE_FILE_NAME ".rsvp_saves.ini"
@@ -974,7 +974,7 @@ static int append_chapter_html(zip_t *za, const char *entry_name, const char *ti
       char *dot = strrchr(chap_titles[*chap_n], '.');
       if (dot) *dot = '\0';
       if (chap_titles[*chap_n][0] == '\0') {
-        snprintf(chap_titles[*chap_n], sizeof(chap_titles[0]), "Rozdział %d", *chap_n + 1);
+        snprintf(chap_titles[*chap_n], sizeof(chap_titles[0]), "Chapter %d", *chap_n + 1);
       }
     }
     (*chap_n)++;
@@ -1276,7 +1276,7 @@ static int pause_panel_h(void) {
   if (pause_options_on()) {
     int h = PAUSE_PANEL_H;
     /* Zostaw trochę miejsca na podgląd słowa nad panelem */
-    if (h > g.sh * 2 / 3) h = g.sh * 2 / 3;
+    if (h > (g.sh * 3) / 4) h = (g.sh * 3) / 4;
     if (h < CTRL_BAR_H) h = CTRL_BAR_H;
     return h;
   }
@@ -1368,10 +1368,10 @@ static void render_pause_options(void) {
   int y0 = g.sh - ph;
   int info_h = PAUSE_INFO_H;
   int row_h = (ph - info_h) / PAUSE_OPT_COUNT;
-  if (row_h < 42) row_h = 42;
+  if (row_h < 64) row_h = 64;
   if (info_h + PAUSE_OPT_COUNT * row_h > ph) {
     info_h = ph - PAUSE_OPT_COUNT * row_h;
-    if (info_h < 72) info_h = 72;
+    if (info_h < 120) info_h = 120;
   }
 
   FillArea(0, y0, g.sw, ph, WHITE);
@@ -1383,15 +1383,23 @@ static void render_pause_options(void) {
 
   char title[96];
   book_title_short(title, sizeof(title));
-  if (g.font_browse_title) SetFont(g.font_browse_title, BLACK);
-  else if (g.font_browse) SetFont(g.font_browse, BLACK);
-  DrawTextRect(20, y0 + 4, g.sw - 40, 28, title, ALIGN_LEFT | VALIGN_MIDDLE);
 
-  /* Pasek postępu */
+  /* Spaced info block — fixed slots avoid e-ink overprint / overlap */
+  int line1_y = y0 + 8;
+  int line1_h = 36;
+  int bar_y = y0 + 48;
+  int bar_h = 16;
+  int line2_y = y0 + 72;
+  int line2_h = 32;
+  int line3_y = y0 + 108;
+  int line3_h = 32;
+
+  if (g.font_browse) SetFont(g.font_browse, BLACK);
+  else if (g.font_browse_title) SetFont(g.font_browse_title, BLACK);
+  DrawTextRect(20, line1_y, g.sw - 40, line1_h, title, ALIGN_LEFT | VALIGN_MIDDLE);
+
   int bar_x = 20;
   int bar_w = g.sw - 40;
-  int bar_y = y0 + 36;
-  int bar_h = 14;
   DrawRect(bar_x, bar_y, bar_w, bar_h, BLACK);
   if (g.word_count > 0) {
     int fill = (int)(((long)idx * (bar_w - 2)) / g.word_count);
@@ -1400,63 +1408,65 @@ static void render_pause_options(void) {
     if (fill > 0) FillArea(bar_x + 1, bar_y + 1, fill, bar_h - 2, BLACK);
   }
 
-  if (g.font_ui) SetFont(g.font_ui, BLACK);
-  char line[128];
+  if (g.font_browse) SetFont(g.font_browse, BLACK);
+  else if (g.font_ui) SetFont(g.font_ui, BLACK);
+  char line[160];
   if (idx <= 1) {
-    snprintf(line, sizeof(line), "Gotowe · %d słów · %d sł/min", g.word_count, g.wpm);
+    snprintf(line, sizeof(line), "Ready · %d words · %d wpm", g.word_count, g.wpm);
   } else {
-    snprintf(line, sizeof(line), "Wznowienie · %d / %d · %d%% · %d sł/min",
+    snprintf(line, sizeof(line), "%d / %d · %d%% · %d wpm",
              idx, g.word_count, pct, g.wpm);
   }
-  DrawTextRect(20, y0 + 54, g.sw - 40, 24, line, ALIGN_LEFT | VALIGN_MIDDLE);
+  DrawTextRect(20, line2_y, g.sw - 40, line2_h, line, ALIGN_LEFT | VALIGN_MIDDLE);
 
   if (chap >= 0 && g.chapters[chap].title) {
-    snprintf(line, sizeof(line), "Rozdz. %d: %s", chap + 1, g.chapters[chap].title);
+    snprintf(line, sizeof(line), "Ch. %d: %s", chap + 1, g.chapters[chap].title);
   } else if (g.chapter_count > 0) {
-    snprintf(line, sizeof(line), "Rozdziały: %d", g.chapter_count);
+    snprintf(line, sizeof(line), "Chapters: %d", g.chapter_count);
   } else {
-    safe_strncpy(line, sizeof(line), "Brak spisu rozdziałów");
+    safe_strncpy(line, sizeof(line), "No chapter list");
   }
-  DrawTextRect(20, y0 + 78, g.sw - 40, 28, line, ALIGN_LEFT | VALIGN_MIDDLE);
+  DrawTextRect(20, line3_y, g.sw - 40, line3_h, line, ALIGN_LEFT | VALIGN_MIDDLE);
 
-  DrawLine(16, y0 + info_h - 1, g.sw - 16, y0 + info_h - 1, LGRAY);
+  DrawLine(16, y0 + info_h - 1, g.sw - 16, y0 + info_h - 1, BLACK);
 
   char play_label[64];
   if (idx <= 1) {
     snprintf(play_label, sizeof(play_label), "▶   Start");
   } else {
-    snprintf(play_label, sizeof(play_label), "▶   Wznów (%d%%)", pct);
+    snprintf(play_label, sizeof(play_label), "▶   Resume (%d%%)", pct);
   }
 
   for (int i = 0; i < PAUSE_OPT_COUNT; i++) {
     int ry = y0 + info_h + i * row_h;
     if (g.font_browse) SetFont(g.font_browse, BLACK);
+    else if (g.font_browse_title) SetFont(g.font_browse_title, BLACK);
 
     if (i == PAUSE_OPT_PLAY) {
       DrawTextRect(24, ry, g.sw - 48, row_h, play_label, ALIGN_LEFT | VALIGN_MIDDLE);
     } else if (i == PAUSE_OPT_CHAPTERS) {
-      DrawTextRect(24, ry, g.sw - 48, row_h, "≡   Rozdziały",
+      DrawTextRect(24, ry, g.sw - 48, row_h, "≡   Chapters",
                    ALIGN_LEFT | VALIGN_MIDDLE);
     } else if (i == PAUSE_OPT_NAV) {
       int third = g.sw / 3;
-      DrawTextRect(0, ry, third, row_h, "« rozdz.", ALIGN_CENTER | VALIGN_MIDDLE);
-      DrawTextRect(third, ry, third, row_h, "Początek", ALIGN_CENTER | VALIGN_MIDDLE);
-      DrawTextRect(2 * third, ry, g.sw - 2 * third, row_h, "rozdz. »",
+      DrawTextRect(0, ry, third, row_h, "« Ch.", ALIGN_CENTER | VALIGN_MIDDLE);
+      DrawTextRect(third, ry, third, row_h, "Beginning", ALIGN_CENTER | VALIGN_MIDDLE);
+      DrawTextRect(2 * third, ry, g.sw - 2 * third, row_h, "Ch. »",
                    ALIGN_CENTER | VALIGN_MIDDLE);
-      DrawLine(third, ry + 8, third, ry + row_h - 8, LGRAY);
-      DrawLine(2 * third, ry + 8, 2 * third, ry + row_h - 8, LGRAY);
+      DrawLine(third, ry + 10, third, ry + row_h - 10, LGRAY);
+      DrawLine(2 * third, ry + 10, 2 * third, ry + row_h - 10, LGRAY);
     } else if (i == PAUSE_OPT_WPM) {
       int third = g.sw / 3;
       DrawTextRect(0, ry, third, row_h, "−10", ALIGN_CENTER | VALIGN_MIDDLE);
       char wpm_l[48];
-      snprintf(wpm_l, sizeof(wpm_l), "%d sł/min", g.wpm);
+      snprintf(wpm_l, sizeof(wpm_l), "%d wpm", g.wpm);
       DrawTextRect(third, ry, third, row_h, wpm_l, ALIGN_CENTER | VALIGN_MIDDLE);
       DrawTextRect(2 * third, ry, g.sw - 2 * third, row_h, "+10",
                    ALIGN_CENTER | VALIGN_MIDDLE);
       DrawLine(third, ry + 10, third, ry + row_h - 10, LGRAY);
       DrawLine(2 * third, ry + 10, 2 * third, ry + row_h - 10, LGRAY);
     } else if (i == PAUSE_OPT_LEAVE) {
-      DrawTextRect(24, ry, g.sw - 48, row_h, "‹   Inna książka",
+      DrawTextRect(24, ry, g.sw - 48, row_h, "‹   Other book",
                    ALIGN_LEFT | VALIGN_MIDDLE);
     }
 
@@ -1465,7 +1475,8 @@ static void render_pause_options(void) {
     }
   }
 
-  PartialUpdate(0, y0, g.sw, ph);
+  /* Full refresh avoids ghosted/overprinted labels on color e-ink */
+  FullUpdate();
 }
 
 static void render_control_bar(void) {
@@ -1488,9 +1499,9 @@ static void render_control_bar(void) {
     snprintf(title, sizeof(title), "%d", g.wpm);
     DrawTextRect(0, y0 + 8, g.sw, 40, title, ALIGN_CENTER | VALIGN_MIDDLE);
     if (g.font_ui) SetFont(g.font_ui, BLACK);
-    DrawTextRect(0, y0 + 50, g.sw, 24, "słów na minutę · swipe ±10",
+    DrawTextRect(0, y0 + 50, g.sw, 24, "words per minute · swipe ±10",
                  ALIGN_CENTER | VALIGN_MIDDLE);
-    DrawTextRect(0, y0 + 90, g.sw, 28, "◄ −10      tap: gotowe      +10 ►",
+    DrawTextRect(0, y0 + 90, g.sw, 28, "◄ −10      tap: done      +10 ►",
                  ALIGN_CENTER | VALIGN_MIDDLE);
     PartialUpdate(0, 0, g.sw, TOP_BAR_H);
     PartialUpdate(0, y0, g.sw, CTRL_BAR_H);
@@ -1614,7 +1625,7 @@ static void jump_to_book_start(void) {
 
 static void jump_relative_chapter(int delta) {
   if (g.chapter_count <= 0) {
-    Message(ICON_INFORMATION, APP_DISPLAY_NAME, "Brak listy rozdziałów w tej książce.", 3000);
+    Message(ICON_INFORMATION, APP_DISPLAY_NAME, "No chapter list in this book.", 3000);
     return;
   }
   int cur = current_chapter_index();
@@ -1639,7 +1650,7 @@ static void draw_chapter_picker(void) {
 
   if (g.font_browse_title) SetFont(g.font_browse_title, BLACK);
   FillArea(0, 0, g.sw, g.browse_header_h, WHITE);
-  DrawTextRect(20, 0, g.sw - 40, g.browse_header_h, "Rozdziały",
+  DrawTextRect(20, 0, g.sw - 40, g.browse_header_h, "Chapters",
                ALIGN_LEFT | VALIGN_MIDDLE);
   DrawLine(0, g.browse_header_h - 2, g.sw, g.browse_header_h - 2, BLACK);
 
@@ -1679,7 +1690,7 @@ static void draw_chapter_picker(void) {
   DrawLine(0, fy, g.sw, fy, BLACK);
   if (g.font_ui) SetFont(g.font_ui, BLACK);
   DrawTextRect(12, fy, g.sw - 24, CTRL_BAR_H,
-               "tap: skocz   ◄►: wybór   MENU: wstecz",
+               "tap: jump   ◄►: select   MENU: back",
                ALIGN_CENTER | VALIGN_MIDDLE);
   FullUpdate();
 }
@@ -1703,7 +1714,7 @@ static void close_menu(void) {
 
 static void open_chapter_picker(void) {
   if (g.chapter_count <= 0) {
-    Message(ICON_INFORMATION, APP_DISPLAY_NAME, "Brak listy rozdziałów w tej książce.", 4000);
+    Message(ICON_INFORMATION, APP_DISPLAY_NAME, "No chapter list in this book.", 4000);
     g.reader_menu = READER_MENU_NONE;
     g.chrome_visible = 1;
     render_reader_full();
@@ -1763,7 +1774,7 @@ static void show_wpm_badge(void) {
   if (g.font_browse) SetFont(g.font_browse, BLACK);
   else if (g.font_ui) SetFont(g.font_ui, BLACK);
   char t[48];
-  snprintf(t, sizeof(t), "%d sł/min", g.wpm);
+  snprintf(t, sizeof(t), "%d wpm", g.wpm);
   DrawTextRect(bx, by, bw, bh, t, ALIGN_CENTER | VALIGN_MIDDLE);
   PartialUpdate(bx, by, bw, bh);
 
@@ -2251,7 +2262,7 @@ static void draw_browser(void) {
   const char *path = browse_title_path();
   const char *folder_name = path;
   if (strcmp(path, "/") == 0) {
-    folder_name = "Pamięć urządzenia";
+    folder_name = "Device storage";
   } else {
     const char *slash = strrchr(path, '/');
     if (slash && slash[1]) folder_name = slash + 1;
@@ -2262,7 +2273,7 @@ static void draw_browser(void) {
                folder_name, ALIGN_LEFT | VALIGN_MIDDLE);
   if (g.font_ui) SetFont(g.font_ui, DGRAY);
   DrawTextRect(20, g.browse_header_h / 2 + 2, g.sw - 40, g.browse_header_h / 2 - 6,
-               "Dotknij albo użyj przycisków na dole", ALIGN_LEFT | VALIGN_MIDDLE);
+               "Tap an item or use the buttons", ALIGN_LEFT | VALIGN_MIDDLE);
   DrawLine(0, g.browse_header_h - 2, g.sw, g.browse_header_h - 2, BLACK);
 
   for (int i = 0; i < rows; i++) {
@@ -2285,7 +2296,7 @@ static void draw_browser(void) {
 
     char left[320];
     if (e->kind == BROWSE_KIND_PARENT) {
-      snprintf(left, sizeof(left), "‹  Wstecz");
+      snprintf(left, sizeof(left), "‹  Back");
     } else {
       snprintf(left, sizeof(left), "%s", name);
     }
@@ -2310,10 +2321,10 @@ static void draw_browser(void) {
 
   char hint[128];
   if (g_browse_count <= 0) {
-    snprintf(hint, sizeof(hint), "Pusty folder · Home = wyjście");
+    snprintf(hint, sizeof(hint), "Empty folder · Home = exit");
   } else {
     snprintf(hint, sizeof(hint),
-             "◄► wybór   MENU otwórz   Home wyjście");
+             "◄► select   MENU open   Home exit");
   }
   DrawTextRect(12, fy, g.sw - 24, BROWSE_FOOTER_H, hint,
                ALIGN_CENTER | VALIGN_MIDDLE);
@@ -2363,7 +2374,7 @@ static void show_browser_list(void) {
   SetPanelType(1);
 
   if (!browse_cwd_is_root()) {
-    browse_add(BROWSE_KIND_PARENT, "Wstecz", NULL);
+    browse_add(BROWSE_KIND_PARENT, "Back", NULL);
   }
 
   int used_iv = 0;
@@ -2381,8 +2392,8 @@ static void show_browser_list(void) {
     ClearScreen();
     if (g.font_browse) SetFont(g.font_browse, BLACK);
     DrawTextRect(24, 80, g.sw - 48, 160,
-                 "Nie można otworzyć katalogu.\n\n"
-                 "Odłącz USB (PC Link)\ni naciśnij MENU.",
+                 "Cannot open folder.\n\n"
+                 "Disconnect USB (PC Link)\nand press MENU.",
                  ALIGN_CENTER | VALIGN_TOP);
     DrawPanel(NULL, "", APP_DISPLAY_NAME, -1);
     FullUpdate();
@@ -2514,7 +2525,7 @@ static void start_from_selected_file_if_ready(void) {
   }
   g.epub_path = (char *)malloc(strlen(g.selected_epub_path) + 1);
   if (!g.epub_path) {
-    Message(ICON_ERROR, APP_DISPLAY_NAME, "Brak pamięci — nie można otworzyć książki.", 5000);
+    Message(ICON_ERROR, APP_DISPLAY_NAME, "Out of memory — cannot open book.", 5000);
     g.file_selected = 0;
     show_browser_list();
     return;
@@ -2523,26 +2534,26 @@ static void start_from_selected_file_if_ready(void) {
 
   ClearScreen();
   if (g.font_ui) SetFont(g.font_ui, BLACK);
-  DrawTextRect(24, g.sh / 2 - 40, g.sw - 48, 80, "Wczytywanie EPUB…",
+  DrawTextRect(24, g.sh / 2 - 40, g.sw - 48, 80, "Loading EPUB…",
                ALIGN_CENTER | VALIGN_MIDDLE);
   FullUpdate();
 
   if (!parse_epub_to_words(g.epub_path)) {
-    const char *msg = "Nie udało się odczytać EPUB.\n"
-                      "Spróbuj innej książki.\n"
-                      "MENU wraca do listy.";
+    const char *msg = "Could not read this EPUB.\n"
+                      "Try another book.\n"
+                      "MENU returns to the list.";
     if (g.last_parse_err == PARSE_ERR_OOM) {
-      msg = "Brak pamięci podczas wczytywania.\n"
-            "Książka jest zbyt duża lub urządzenie ma mało RAM.";
+      msg = "Out of memory while loading.\n"
+            "The book is too large or the device is low on RAM.";
     } else if (g.last_parse_err == PARSE_ERR_EMPTY) {
-      msg = "Brak tekstu w EPUB\n"
-            "(pusty plik albo tylko multimedia).";
+      msg = "No text in this EPUB\n"
+            "(empty file or media-only).";
     } else if (g.last_parse_err == PARSE_ERR_TRUNC) {
-      msg = "Nie udało się wczytać całej książki\n"
-            "(brak pamięci — przerwano, by uniknąć uciętego tekstu).";
+      msg = "Could not load the whole book\n"
+            "(out of memory — stopped to avoid truncated text).";
     } else if (g.last_parse_err == PARSE_ERR_OPEN) {
-      msg = "Nie udało się otworzyć pliku EPUB.\n"
-            "Sprawdź, czy USB jest odłączone.";
+      msg = "Could not open the EPUB file.\n"
+            "Check that USB is disconnected.";
     }
     Message(ICON_ERROR, APP_DISPLAY_NAME, msg, 6000);
     g.file_selected = 0;
@@ -2590,7 +2601,7 @@ static int main_handler(int type, int par1, int par2) {
     SetPanelType(1);
 
     if (!g.font_word || !g.font_ui) {
-      Message(ICON_ERROR, APP_DISPLAY_NAME, "Nie udało się otworzyć fontów", 5000);
+      Message(ICON_ERROR, APP_DISPLAY_NAME, "Could not open fonts", 5000);
       /* Bez fontów — od razu przeglądarka (bez splash) */
       g.splash_active = 0;
     } else {
@@ -2819,10 +2830,10 @@ static int main_handler(int type, int par1, int par2) {
           int ph = pause_panel_h();
           int info_h = PAUSE_INFO_H;
           int row_h = (ph - info_h) / PAUSE_OPT_COUNT;
-          if (row_h < 42) row_h = 42;
+          if (row_h < 64) row_h = 64;
           if (info_h + PAUSE_OPT_COUNT * row_h > ph) {
             info_h = ph - PAUSE_OPT_COUNT * row_h;
-            if (info_h < 72) info_h = 72;
+            if (info_h < 120) info_h = 120;
           }
 
           if (up_y < bar_y + info_h) return 0;

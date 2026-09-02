@@ -2,7 +2,7 @@
 
 **RSVP Reader** — a Rapid Serial Visual Presentation (RSVP) app for reading EPUB on the **PocketBook Verse Pro Color (B300)**. Built with InkView / SDK 6. Other PocketBook models are untested — use at your own risk.
 
-The on-device UI is in Polish; this README is in English for GitHub.
+The on-device UI is in **English**.
 
 ## Download
 
@@ -38,11 +38,11 @@ Swipe or the pause panel adjusts speed in steps of **±10**. Prefer staying near
 | Action | Gesture / key |
 | --- | --- |
 | Pause → options panel | Tap while playing |
-| Start / Resume | Tap “Start” / “Wznów” (or tap the word preview) |
+| Start / Resume | Tap “Start” / “Resume” (or tap the word preview) |
 | Speed ±10 WPM | Swipe up/down (play or pause) or −10 / +10 in the panel (**cap 200**, default **150**) |
-| Chapters | “Rozdziały” row in the pause panel |
+| Chapters | “Chapters” row in the pause panel |
 | ±1 chapter / start of book | Navigation row in the pause panel |
-| Another book | “Inna książka” or **Back** |
+| Another book | “Other book” or **Back** |
 | Exit app | **Home** |
 
 After opening a book, playback does **not** start automatically — you see a panel with progress (%), WPM, and Start/Resume.
