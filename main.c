@@ -20,7 +20,6 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 
 // RSVP
 #define RSVP_TIMER_NAME "rsvp_tick"
@@ -63,14 +62,14 @@ enum {
   PAUSE_OPT_LEAVE = 4
 };
 
-// WPM (słowa/min)
-#define WPM_DEFAULT 220
+// WPM (słowa/min) — zero-skip > speed on Kaleido 3 color e-ink
+#define WPM_DEFAULT 180
 #define WPM_STEP 10
 #define WPM_SWIPE_STEP 10
 #define WPM_MIN 30
-/* B300 (Kaleido 3): PartialUpdate potrzebuje ~240 ms na czytelne słowo */
-#define EINK_MIN_WORD_MS 240
-#define WPM_MAX 250
+/* Hard floor after each painted frame (panel must finish before next word). */
+#define EINK_MIN_WORD_MS 320
+#define WPM_MAX 200
 /* Jednostki wyświetlania: słowa funkcyjne (rsvp_glue.h) łączone z następnym */
 #define UNIT_TEXT_MAX 384
 #define CHAPTER_MAX 256
@@ -1597,14 +1596,52 @@ static void render_word_at_idx(int word_idx) {
   draw_orp_guides(cx, y, g.word_text_h);
   DrawString(x, y, unit_text);
 
-  g.display_word_idx = word_idx;
-  g.last_rect_x = 0;
-  g.last_rect_y = ctop;
-  g.last_rect_w = g.sw;
-  g.last_rect_h = content_h;
-  g.rect_valid = 1;
+  /* Update only old∪new word region so the previous word is cleared on-panel
+   * without refreshing the whole content band (faster → less frame drop). */
+  {
+    int total_w = g.font_word ? StringWidth(unit_text) : (prefix_w + orp_w);
+    int pad_x = 28;
+    int top = y - 28;
+    int bot = y + g.word_text_h + 16;
+    int nx, ny, nw, nh;
+    int ux, uy, uw, uh;
 
-  PartialUpdate(0, ctop, g.sw, content_h);
+    if (top < ctop + 8) top = ctop + 8;
+    if (bot > cbot - 8) bot = cbot - 8;
+    nx = x - pad_x;
+    if (nx < 0) nx = 0;
+    nw = total_w + 2 * pad_x;
+    if (nx + nw > g.sw) nw = g.sw - nx;
+    ny = top;
+    nh = bot - top;
+    if (nh < g.word_text_h) nh = g.word_text_h;
+
+    ux = nx;
+    uy = ny;
+    uw = nw;
+    uh = nh;
+    if (g.rect_valid) {
+      int x2 = nx + nw;
+      int y2 = ny + nh;
+      int ox2 = g.last_rect_x + g.last_rect_w;
+      int oy2 = g.last_rect_y + g.last_rect_h;
+      if (g.last_rect_x < ux) ux = g.last_rect_x;
+      if (g.last_rect_y < uy) uy = g.last_rect_y;
+      if (ox2 > x2) x2 = ox2;
+      if (oy2 > y2) y2 = oy2;
+      uw = x2 - ux;
+      uh = y2 - uy;
+    }
+
+    g.display_word_idx = word_idx;
+    g.last_rect_x = nx;
+    g.last_rect_y = ny;
+    g.last_rect_w = nw;
+    g.last_rect_h = nh;
+    g.rect_valid = 1;
+
+    PartialUpdate(ux, uy, uw, uh);
+  }
 }
 
 static void render_word_at_preview(void) {
@@ -1845,12 +1882,6 @@ static void show_wpm_badge(void) {
 static void timer_proc(void);
 static int g_play_ticks;
 
-static long long now_ms(void) {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return (long long)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
-}
-
 static int ms_per_word(void) {
   int wpm = g.wpm > 0 ? g.wpm : WPM_DEFAULT;
   return 60000 / wpm;
@@ -1864,11 +1895,11 @@ static int unit_display_ms(int span) {
   return target;
 }
 
-static int playback_delay_ms(int span, long long render_start_ms) {
-  int target = unit_display_ms(span);
-  int elapsed = (int)(now_ms() - render_start_ms);
-  int wait = target - elapsed;
-  if (wait < 1) wait = 1; /* SetWeakTimer(0) is unreliable on InkView */
+/* Schedule next frame AFTER paint. Do not subtract paint time — PartialUpdate
+ * may return before the panel has finished, and any "credit" risks a visual skip. */
+static int playback_delay_ms(int span) {
+  int wait = unit_display_ms(span);
+  if (wait < 1) wait = 1;
   return wait;
 }
 
@@ -1879,7 +1910,7 @@ static void stop_playback_timer(void) {
 static void arm_playback_timer(void) {
   int span = unit_word_span(g.next_word_idx);
   /* SetWeakTimer: jak w CoolReader — one-shot, przeładowywany w callbacku */
-  SetWeakTimer(RSVP_TIMER_NAME, timer_proc, unit_display_ms(span));
+  SetWeakTimer(RSVP_TIMER_NAME, timer_proc, playback_delay_ms(span));
   SetAutoPowerOff(0); /* nie usypiaj podczas czytania */
 }
 
@@ -1914,7 +1945,7 @@ static void set_playing(int enable, int from_menu) {
     if (shown_span < 1) shown_span = 1;
     advance_and_render_one_word();
     if (g.playing) {
-      SetWeakTimer(RSVP_TIMER_NAME, timer_proc, unit_display_ms(shown_span));
+      SetWeakTimer(RSVP_TIMER_NAME, timer_proc, playback_delay_ms(shown_span));
       SetAutoPowerOff(0);
     }
     return;
@@ -1967,7 +1998,6 @@ static void advance_and_render_one_word(void) {
 }
 
 static void timer_proc(void) {
-  long long render_start;
   int span;
 
   if (!g.playing || g.reader_menu || g.browse_active || g.word_count <= 0) {
@@ -1975,10 +2005,10 @@ static void timer_proc(void) {
   }
   span = unit_word_span(g.next_word_idx);
   if (span < 1) span = 1;
-  render_start = now_ms();
   advance_and_render_one_word();
   if (g.playing) {
-    SetWeakTimer(RSVP_TIMER_NAME, timer_proc, playback_delay_ms(span, render_start));
+    /* Full interval after paint — never overlap the next word with this frame. */
+    SetWeakTimer(RSVP_TIMER_NAME, timer_proc, playback_delay_ms(span));
   }
 }
 
