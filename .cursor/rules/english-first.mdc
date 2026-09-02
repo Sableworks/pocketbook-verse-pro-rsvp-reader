@@ -1,0 +1,11 @@
+---
+description: English-first UI and docs for RSVP Reader
+alwaysApply: true
+---
+
+# Language: English first
+
+- **Default / native language is English** for all user-facing UI strings, dialogs, errors, splash text, README, GitHub release notes, and public docs.
+- Do **not** add Polish (or other languages) as the primary UI. Other languages may be added later only as optional alternatives (e.g. a language setting), never as the sole/default copy.
+- Code comments may stay in English. Prefer English for new comments.
+- Product credit and brand names stay as-is (e.g. Sableworks, Mateusz Blumensztajn, PocketBook).
