@@ -1327,6 +1327,51 @@ static int current_chapter_index(void) {
   return cur;
 }
 
+/* Zakres słów rozdziału [start, end) — end = start następnego lub word_count */
+static void chapter_word_range(int chap_idx, int *start_out, int *end_out) {
+  int start = 0;
+  int end = g.word_count;
+  if (chap_idx < 0 || chap_idx >= g.chapter_count || g.word_count <= 0) {
+    if (start_out) *start_out = 0;
+    if (end_out) *end_out = 0;
+    return;
+  }
+  start = g.chapters[chap_idx].word_idx;
+  if (start < 0) start = 0;
+  if (start > g.word_count) start = g.word_count;
+  if (chap_idx + 1 < g.chapter_count) {
+    end = g.chapters[chap_idx + 1].word_idx;
+    if (end < start) end = start;
+    if (end > g.word_count) end = g.word_count;
+  }
+  if (start_out) *start_out = start;
+  if (end_out) *end_out = end;
+}
+
+/* Postęp w rozdziale: done = ile już w tym rozdziale, total = długość rozdziału */
+static void chapter_progress(int chap_idx, int *done_out, int *total_out, int *pct_out) {
+  int start = 0, end = 0;
+  int pos;
+  int done = 0, total = 0, pct = 0;
+
+  chapter_word_range(chap_idx, &start, &end);
+  total = end - start;
+  if (total < 0) total = 0;
+
+  pos = progress_word_num(); /* 1-based preview; 0 jeśli brak słów */
+  if (total > 0 && pos > 0) {
+    done = pos - start;
+    if (done < 0) done = 0;
+    if (done > total) done = total;
+    pct = (int)(((long)done * 100) / total);
+    if (pct > 100) pct = 100;
+  }
+
+  if (done_out) *done_out = done;
+  if (total_out) *total_out = total;
+  if (pct_out) *pct_out = pct;
+}
+
 static void book_title_short(char *out, size_t outsz) {
   const char *base = g.epub_path ? path_basename(g.epub_path) : APP_DISPLAY_NAME;
   safe_strncpy(out, outsz, base);
@@ -1419,8 +1464,18 @@ static void render_pause_options(void) {
   }
   DrawTextRect(20, line2_y, g.sw - 40, line2_h, line, ALIGN_LEFT | VALIGN_MIDDLE);
 
-  if (chap >= 0 && g.chapters[chap].title) {
-    snprintf(line, sizeof(line), "Ch. %d: %s", chap + 1, g.chapters[chap].title);
+  if (chap >= 0) {
+    int ch_done = 0, ch_total = 0, ch_pct = 0;
+    const char *ch_title = g.chapters[chap].title;
+    chapter_progress(chap, &ch_done, &ch_total, &ch_pct);
+    if (ch_title && ch_title[0]) {
+      /* Progress first — easy to judge remaining chapter time (e.g. on a train) */
+      snprintf(line, sizeof(line), "Ch. %d · %d/%d · %d%% · %s",
+               chap + 1, ch_done, ch_total, ch_pct, ch_title);
+    } else {
+      snprintf(line, sizeof(line), "Ch. %d · %d/%d · %d%%",
+               chap + 1, ch_done, ch_total, ch_pct);
+    }
   } else if (g.chapter_count > 0) {
     snprintf(line, sizeof(line), "Chapters: %d", g.chapter_count);
   } else {
