@@ -47,19 +47,21 @@
 #define MENU_W_PX 300
 #define MENU_H_PX 220
 
-/* Pause panel: larger touch rows; leave room for word preview above */
-#define PAUSE_INFO_H 150
-#define PAUSE_ROW_H 72
-#define PAUSE_OPT_COUNT 5
-#define PAUSE_PANEL_H (PAUSE_INFO_H + PAUSE_OPT_COUNT * PAUSE_ROW_H)
+/* Pause screen (full layout). Word band keeps the same RSVP font/focal as play. */
+#define PAUSE_TOP_H 56
+#define PAUSE_CTRL_H 108
+#define PAUSE_PROG_H 92
+#define PAUSE_MARGIN 16
+#define PAUSE_PLAY_SIZE 76
 
-enum {
-  PAUSE_OPT_PLAY = 0,
-  PAUSE_OPT_CHAPTERS = 1,
-  PAUSE_OPT_NAV = 2, /* « ch. | Start | ch. » */
-  PAUSE_OPT_WPM = 3,
-  PAUSE_OPT_LEAVE = 4
-};
+/* One active PocketBook .dic at a time (SDK holds the index; we cache one result). */
+#define DICT_NAME_MAX 128
+#define DICT_HEAD_MAX 256
+#define DICT_TRANS_MAX 1800
+#define DICT_QUERY_MAX 192
+#define DICT_BAR_H 168 /* legacy full-dict panel chrome */
+#define DICT_PICK_MIN_W 120
+#define DICT_PICK_MAX_W 180
 
 // WPM (słowa/min) — prosty timer jak v1.0 (bez grupowania / twardego flooru e-ink)
 #define WPM_DEFAULT 150
@@ -73,6 +75,7 @@ enum {
 #define WPM_BADGE_MS 2500
 #define WPM_BADGE_TIMER "wpm_badge"
 #define INI_KEY_WPM "wpm"
+#define INI_KEY_DICT "dictionary"
 #define SAVE_LINE_MAX 2048
 
 // File dialog defaults
@@ -104,7 +107,9 @@ typedef struct {
 enum {
   READER_MENU_NONE = 0,
   READER_MENU_WPM = 2,
-  READER_MENU_CHAPTERS = 3
+  READER_MENU_CHAPTERS = 3,
+  READER_MENU_DICT = 4,
+  READER_MENU_DICT_PICK = 5
 };
 
 static struct {
@@ -163,6 +168,27 @@ static struct {
 
   /* Splash na starcie (1 s) — ignoruj wejście aż skończy */
   int splash_active;
+
+  /* Dictionary: one OpenDictionary session; LookupWord result copied locally */
+  char dict_name[DICT_NAME_MAX];
+  int dict_open;
+  char dict_query[DICT_QUERY_MAX];
+  char dict_head[DICT_HEAD_MAX];
+  char dict_trans[DICT_TRANS_MAX];
+  int dict_found;
+  int dict_scroll;
+  int dict_sel;
+  char **dict_list; /* EnumDictionaries(); system-owned, do not free */
+  int dict_count;
+  int dict_pick_from_panel; /* 1 = return to full dict view after picker */
+
+  /* Pause-screen hit targets (filled by render_pause_screen) */
+  int pause_lib_x1;
+  int pause_word_y0, pause_word_y1; /* tap-to-play band (above dict card) */
+  int pause_dict_x0, pause_dict_y0, pause_dict_x1, pause_dict_y1;
+  int pause_wpm_x0, pause_wpm_y0, pause_wpm_x1, pause_wpm_y1;
+  int pause_play_x0, pause_play_y0, pause_play_x1, pause_play_y1;
+  int pause_chap_x0, pause_chap_y0, pause_chap_x1, pause_chap_y1;
 } g;
 
 static void free_book_data(void);
@@ -184,8 +210,27 @@ static void jump_to_book_start(void);
 static void show_browser_list(void);
 static void save_progress(void);
 static void save_wpm(void);
+static void save_dictionary_pref(void);
 static void load_wpm(void);
+static void load_dictionary_pref(void);
 static void load_progress_and_set_next_index(void);
+static void dict_close(void);
+static void dict_refresh_list(void);
+static int dict_ensure_open(void);
+static int dict_set_active(const char *name);
+static void dict_lookup_current(void);
+static void open_dictionary_panel(void);
+static void draw_dictionary_panel(void);
+static void close_dictionary_panel(void);
+static void open_dict_picker(int from_panel);
+static void draw_dict_picker(void);
+static void dict_step_word(int delta);
+static void pause_step_word(int delta);
+static void render_dict_pause_bar(void);
+static void dict_refresh_for_preview(void);
+static int dict_picker_width(void);
+static void render_pause_screen(void);
+static int pause_hit(int x, int y, int x0, int y0, int x1, int y1);
 static int parse_epub_to_words(const char *path);
 static int current_chapter_index(void);
 static int pause_options_on(void);
@@ -1260,12 +1305,14 @@ static void free_book_data(void) {
 // Rendering — play = immersja (tylko słowo); pauza = panel opcji
 static int reader_chrome_on(void) {
   if (g.reader_menu == READER_MENU_CHAPTERS) return 0;
+  if (g.reader_menu == READER_MENU_DICT) return 0;
+  if (g.reader_menu == READER_MENU_DICT_PICK) return 0;
   if (g.reader_menu == READER_MENU_WPM) return 1;
   if (!g.playing) return 1;
   return g.chrome_visible;
 }
 
-/* Podczas pauzy: jeden panel opcji na dole (bez osobnego paska ikon u góry).
+/* Podczas pauzy: pełny ekran (Library / słowo / karta dict / kontrolki / postęp).
  * Panel WPM zostawia cienki top bar (wstecz / spis / tytuł). */
 static int pause_options_on(void) {
   return reader_chrome_on() && g.reader_menu == READER_MENU_NONE && !g.playing;
@@ -1273,13 +1320,8 @@ static int pause_options_on(void) {
 
 static int pause_panel_h(void) {
   if (g.reader_menu == READER_MENU_WPM) return CTRL_BAR_H;
-  if (pause_options_on()) {
-    int h = PAUSE_PANEL_H;
-    /* Zostaw trochę miejsca na podgląd słowa nad panelem */
-    if (h > (g.sh * 3) / 4) h = (g.sh * 3) / 4;
-    if (h < CTRL_BAR_H) h = CTRL_BAR_H;
-    return h;
-  }
+  /* New pause UI draws the whole screen itself — no bottom options strip. */
+  if (pause_options_on()) return 0;
   return reader_chrome_on() ? CTRL_BAR_H : 0;
 }
 
@@ -1287,13 +1329,22 @@ static int reader_has_top_bar(void) {
   return g.reader_menu == READER_MENU_WPM;
 }
 
+static int reader_has_dict_bar(void) {
+  return 0; /* dictionary lives in the pause card now */
+}
+
 static int reader_content_top(void) {
-  return reader_has_top_bar() ? TOP_BAR_H : 0;
+  if (reader_has_top_bar()) return TOP_BAR_H;
+  return 0;
 }
 
 static int reader_content_bottom(void) {
   if (!reader_chrome_on()) return g.sh;
   return g.sh - pause_panel_h();
+}
+
+static int pause_hit(int x, int y, int x0, int y0, int x1, int y1) {
+  return x >= x0 && x < x1 && y >= y0 && y < y1;
 }
 
 static int get_preview_idx(void) {
@@ -1408,137 +1459,256 @@ static void render_top_bar(void) {
   DrawTextRect(152, 0, g.sw - 160, TOP_BAR_H, title, ALIGN_LEFT | VALIGN_MIDDLE);
 }
 
-static void render_pause_options(void) {
-  int ph = pause_panel_h();
-  int y0 = g.sh - ph;
-  int info_h = PAUSE_INFO_H;
-  int row_h = (ph - info_h) / PAUSE_OPT_COUNT;
-  if (row_h < 64) row_h = 64;
-  if (info_h + PAUSE_OPT_COUNT * row_h > ph) {
-    info_h = ph - PAUSE_OPT_COUNT * row_h;
-    if (info_h < 120) info_h = 120;
+static void pause_draw_progress_bar(int x, int y, int w, int h, int pct) {
+  DrawRect(x, y, w, h, BLACK);
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  if (pct > 0 && w > 2) {
+    int fill = (int)(((long)pct * (w - 2)) / 100);
+    if (fill < 1) fill = 1;
+    if (fill > w - 2) fill = w - 2;
+    FillArea(x + 1, y + 1, fill, h - 2, BLACK);
   }
+}
 
-  FillArea(0, y0, g.sw, ph, WHITE);
-  DrawLine(0, y0, g.sw, y0, BLACK);
+/* Geometric play triangle — PocketBook fonts often lack ▶ */
+static void pause_draw_play_icon(int bx, int by, int bw, int bh) {
+  int h = (bh * 46) / 100;
+  int w = (bw * 40) / 100;
+  int x0, y0, half, row;
+  if (h < 18) h = 18;
+  if (w < 14) w = 14;
+  x0 = bx + (bw - w) / 2 + 2;
+  y0 = by + (bh - h) / 2;
+  half = h / 2;
+  if (half < 1) half = 1;
+  for (row = 0; row < h; row++) {
+    int dist = (row <= half) ? row : (h - 1 - row);
+    int rw = 2 + (dist * (w - 2)) / half;
+    if (rw < 2) rw = 2;
+    if (rw > w) rw = w;
+    FillArea(x0, y0 + row, rw, 1, BLACK);
+  }
+}
 
-  int idx = progress_word_num();
-  int pct = progress_percent();
+/* Full pause UI matching the mockup; RSVP word Y matches play mode. */
+static void render_pause_screen(void) {
+  int top_h = PAUSE_TOP_H;
+  int ctrl_h = PAUSE_CTRL_H;
+  int prog_h = PAUSE_PROG_H;
+  int margin = PAUSE_MARGIN;
+  int card_y, card_h, ctrl_y, prog_y;
+  int play_s = PAUSE_PLAY_SIZE;
+  int play_x, play_y;
+  int idx = get_preview_idx();
+  int book_pct = progress_percent();
   int chap = current_chapter_index();
-
+  int ch_pct = 0;
+  int word_y, word_bottom;
   char title[96];
+  char chap_label[96];
+  const char *word;
+
+  ctrl_y = g.sh - prog_h - ctrl_h;
+  prog_y = g.sh - prog_h;
+
+  /* Same vertical position as immersive play (full-screen center). */
+  word_y = (g.sh / 2) - (g.word_text_h / 2);
+  if (word_y < top_h + 8) word_y = top_h + 8;
+  /* Extra gap so the card clears the lower focal guide */
+  word_bottom = word_y + g.word_text_h + 36;
+
+  /* Dict card under the word — grow downward, but never into WPM/Play/Chapter. */
+  card_y = word_bottom + 10;
+  card_h = ctrl_y - card_y - 12;
+  if (card_h > 280) card_h = 280; /* long entries still clip inside the card */
+  if (card_h < 100) card_h = 100;
+  if (card_y + card_h > ctrl_y - 10) {
+    card_h = ctrl_y - 10 - card_y;
+    if (card_h < 80) card_h = 80;
+  }
+  g.pause_word_y0 = top_h;
+  g.pause_word_y1 = card_y;
+
   book_title_short(title, sizeof(title));
-
-  /* Spaced info block — fixed slots avoid e-ink overprint / overlap */
-  int line1_y = y0 + 8;
-  int line1_h = 36;
-  int bar_y = y0 + 48;
-  int bar_h = 16;
-  int line2_y = y0 + 72;
-  int line2_h = 32;
-  int line3_y = y0 + 108;
-  int line3_h = 32;
-
-  if (g.font_browse) SetFont(g.font_browse, BLACK);
-  else if (g.font_browse_title) SetFont(g.font_browse_title, BLACK);
-  DrawTextRect(20, line1_y, g.sw - 40, line1_h, title, ALIGN_LEFT | VALIGN_MIDDLE);
-
-  int bar_x = 20;
-  int bar_w = g.sw - 40;
-  DrawRect(bar_x, bar_y, bar_w, bar_h, BLACK);
-  if (g.word_count > 0) {
-    int fill = (int)(((long)idx * (bar_w - 2)) / g.word_count);
-    if (fill < 0) fill = 0;
-    if (fill > bar_w - 2) fill = bar_w - 2;
-    if (fill > 0) FillArea(bar_x + 1, bar_y + 1, fill, bar_h - 2, BLACK);
+  if (chap >= 0) {
+    chapter_progress(chap, NULL, NULL, &ch_pct);
+    if (g.chapters[chap].title && g.chapters[chap].title[0]) {
+      safe_strncpy(chap_label, sizeof(chap_label), g.chapters[chap].title);
+    } else {
+      snprintf(chap_label, sizeof(chap_label), "Chapter %d", chap + 1);
+    }
+  } else {
+    safe_strncpy(chap_label, sizeof(chap_label), "Chapters");
   }
 
+  /* Clear main area white */
+  FillArea(0, top_h, g.sw, ctrl_y - top_h, WHITE);
+
+  /* --- Word at play-mode height --- */
+  if (g.word_count > 0 && idx >= 0 && idx < g.word_count) {
+    word = g.words[idx].word;
+    if (word) {
+      int w = g.words[idx].width_px;
+      int orp_off, cx, x;
+      if (g.font_word) SetFont(g.font_word, BLACK);
+      if (w <= 0 && g.font_word) w = StringWidth((char *)word);
+      orp_off = (w * ORP_RATIO_NUM) / ORP_RATIO_DEN;
+      cx = g.sw / 2;
+      x = cx - orp_off;
+      {
+        int gtop = top_h + 4;
+        int gbot = card_y - 4;
+        int line_top = word_y - 28;
+        int line_bot = word_y + g.word_text_h + 16;
+        if (line_top < gtop) line_top = gtop;
+        if (line_bot > gbot) line_bot = gbot;
+        DrawLine(cx, line_top, cx, word_y - 6, DGRAY);
+        DrawLine(cx, word_y + g.word_text_h + 4, cx, line_bot, DGRAY);
+      }
+      DrawString(x, word_y, word);
+      g.display_word_idx = idx;
+    }
+  }
+
+  /* --- Top: Library | title (drawn after word so bar stays crisp) --- */
+  FillArea(0, 0, g.sw, top_h, WHITE);
+  DrawLine(0, top_h - 1, g.sw, top_h - 1, BLACK);
   if (g.font_browse) SetFont(g.font_browse, BLACK);
   else if (g.font_ui) SetFont(g.font_ui, BLACK);
-  char line[160];
-  if (idx <= 1) {
-    snprintf(line, sizeof(line), "Ready · %d words · %d wpm", g.word_count, g.wpm);
-  } else {
-    snprintf(line, sizeof(line), "%d / %d · %d%% · %d wpm",
-             idx, g.word_count, pct, g.wpm);
-  }
-  DrawTextRect(20, line2_y, g.sw - 40, line2_h, line, ALIGN_LEFT | VALIGN_MIDDLE);
+  DrawTextRect(margin, 0, 150, top_h, "‹ Library", ALIGN_LEFT | VALIGN_MIDDLE);
+  g.pause_lib_x1 = margin + 150;
+  if (g.font_ui) SetFont(g.font_ui, BLACK);
+  DrawTextRect(g.pause_lib_x1 + 8, 0, g.sw - g.pause_lib_x1 - margin,
+               top_h, title, ALIGN_LEFT | VALIGN_MIDDLE);
 
-  if (chap >= 0) {
-    int ch_done = 0, ch_total = 0, ch_pct = 0;
-    const char *ch_title = g.chapters[chap].title;
-    chapter_progress(chap, &ch_done, &ch_total, &ch_pct);
-    if (ch_title && ch_title[0]) {
-      /* Progress first — easy to judge remaining chapter time (e.g. on a train) */
-      snprintf(line, sizeof(line), "Ch. %d · %d/%d · %d%% · %s",
-               chap + 1, ch_done, ch_total, ch_pct, ch_title);
-    } else {
-      snprintf(line, sizeof(line), "Ch. %d · %d/%d · %d%%",
-               chap + 1, ch_done, ch_total, ch_pct);
-    }
-  } else if (g.chapter_count > 0) {
-    snprintf(line, sizeof(line), "Chapters: %d", g.chapter_count);
-  } else {
-    safe_strncpy(line, sizeof(line), "No chapter list");
-  }
-  DrawTextRect(20, line3_y, g.sw - 40, line3_h, line, ALIGN_LEFT | VALIGN_MIDDLE);
+  /* --- Dictionary card (shorter) --- */
+  FillArea(margin, card_y, g.sw - 2 * margin, card_h, WHITE);
+  DrawRect(margin, card_y, g.sw - 2 * margin, card_h, BLACK);
 
-  DrawLine(16, y0 + info_h - 1, g.sw - 16, y0 + info_h - 1, BLACK);
+  g.pause_dict_x0 = margin + 8;
+  g.pause_dict_y0 = card_y + 8;
+  g.pause_dict_x1 = g.pause_dict_x0 + 56;
+  g.pause_dict_y1 = g.pause_dict_y0 + 40;
+  DrawRect(g.pause_dict_x0, g.pause_dict_y0,
+           g.pause_dict_x1 - g.pause_dict_x0,
+           g.pause_dict_y1 - g.pause_dict_y0, BLACK);
+  FillArea(g.pause_dict_x0 + 10, g.pause_dict_y0 + 8, 8, 20, BLACK);
+  DrawRect(g.pause_dict_x0 + 22, g.pause_dict_y0 + 6, 10, 24, BLACK);
+  DrawRect(g.pause_dict_x0 + 36, g.pause_dict_y0 + 10, 8, 20, BLACK);
+  if (g.font_ui) SetFont(g.font_ui, BLACK);
+  DrawTextRect(g.pause_dict_x0, g.pause_dict_y1 - 14,
+               g.pause_dict_x1 - g.pause_dict_x0, 12, "v",
+               ALIGN_CENTER | VALIGN_MIDDLE);
 
-  char play_label[64];
-  if (idx <= 1) {
-    snprintf(play_label, sizeof(play_label), "▶   Start");
-  } else {
-    snprintf(play_label, sizeof(play_label), "▶   Resume (%d%%)", pct);
-  }
+  {
+    int text_x = g.pause_dict_x1 + 10;
+    int text_w = g.sw - margin - 10 - text_x;
+    int ty = card_y + 8;
+    const char *head = g.dict_query[0] ? g.dict_query :
+                       (g.word_count > 0 && idx >= 0 && idx < g.word_count &&
+                        g.words[idx].word ? g.words[idx].word : "-");
 
-  for (int i = 0; i < PAUSE_OPT_COUNT; i++) {
-    int ry = y0 + info_h + i * row_h;
     if (g.font_browse) SetFont(g.font_browse, BLACK);
     else if (g.font_browse_title) SetFont(g.font_browse_title, BLACK);
+    DrawTextRect(text_x, ty, text_w, 32, head, ALIGN_LEFT | VALIGN_MIDDLE);
+    ty += 34;
 
-    if (i == PAUSE_OPT_PLAY) {
-      DrawTextRect(24, ry, g.sw - 48, row_h, play_label, ALIGN_LEFT | VALIGN_MIDDLE);
-    } else if (i == PAUSE_OPT_CHAPTERS) {
-      DrawTextRect(24, ry, g.sw - 48, row_h, "≡   Chapters",
-                   ALIGN_LEFT | VALIGN_MIDDLE);
-    } else if (i == PAUSE_OPT_NAV) {
-      int third = g.sw / 3;
-      DrawTextRect(0, ry, third, row_h, "« Ch.", ALIGN_CENTER | VALIGN_MIDDLE);
-      DrawTextRect(third, ry, third, row_h, "Beginning", ALIGN_CENTER | VALIGN_MIDDLE);
-      DrawTextRect(2 * third, ry, g.sw - 2 * third, row_h, "Ch. »",
-                   ALIGN_CENTER | VALIGN_MIDDLE);
-      DrawLine(third, ry + 10, third, ry + row_h - 10, LGRAY);
-      DrawLine(2 * third, ry + 10, 2 * third, ry + row_h - 10, LGRAY);
-    } else if (i == PAUSE_OPT_WPM) {
-      int third = g.sw / 3;
-      DrawTextRect(0, ry, third, row_h, "−10", ALIGN_CENTER | VALIGN_MIDDLE);
-      char wpm_l[48];
-      snprintf(wpm_l, sizeof(wpm_l), "%d wpm", g.wpm);
-      DrawTextRect(third, ry, third, row_h, wpm_l, ALIGN_CENTER | VALIGN_MIDDLE);
-      DrawTextRect(2 * third, ry, g.sw - 2 * third, row_h, "+10",
-                   ALIGN_CENTER | VALIGN_MIDDLE);
-      DrawLine(third, ry + 10, third, ry + row_h - 10, LGRAY);
-      DrawLine(2 * third, ry + 10, 2 * third, ry + row_h - 10, LGRAY);
-    } else if (i == PAUSE_OPT_LEAVE) {
-      DrawTextRect(24, ry, g.sw - 48, row_h, "‹   Other book",
-                   ALIGN_LEFT | VALIGN_MIDDLE);
+    if (g.font_ui) SetFont(g.font_ui, BLACK);
+    if (g.dict_name[0]) {
+      DrawTextRect(text_x, ty, text_w, 24, g.dict_name, ALIGN_LEFT | VALIGN_MIDDLE);
+      ty += 26;
     }
 
-    if (i < PAUSE_OPT_COUNT - 1) {
-      DrawLine(20, ry + row_h - 1, g.sw - 20, ry + row_h - 1, LGRAY);
+    {
+      int def_h = card_y + card_h - 8 - ty;
+      const char *def = g.dict_trans[0] ? g.dict_trans :
+                        (g.dict_open ? "Not found in this dictionary."
+                                     : "Tap the books icon to choose a dictionary.");
+      if (def_h < 36) def_h = 36;
+      DrawTextRect(margin + 12, ty, g.sw - 2 * margin - 24, def_h, def,
+                   ALIGN_LEFT | VALIGN_TOP);
     }
   }
 
-  /* Full refresh avoids ghosted/overprinted labels on color e-ink */
-  FullUpdate();
+  /* --- Controls: WPM | Play | Chapter --- */
+  FillArea(0, ctrl_y, g.sw, ctrl_h, WHITE);
+  DrawLine(0, ctrl_y, g.sw, ctrl_y, LGRAY);
+
+  play_x = (g.sw - play_s) / 2;
+  play_y = ctrl_y + (ctrl_h - play_s) / 2;
+  g.pause_play_x0 = play_x;
+  g.pause_play_y0 = play_y;
+  g.pause_play_x1 = play_x + play_s;
+  g.pause_play_y1 = play_y + play_s;
+  DrawRect(play_x, play_y, play_s, play_s, BLACK);
+  pause_draw_play_icon(play_x, play_y, play_s, play_s);
+
+  g.pause_wpm_x0 = margin;
+  g.pause_wpm_y0 = ctrl_y + 16;
+  g.pause_wpm_x1 = play_x - 12;
+  g.pause_wpm_y1 = ctrl_y + ctrl_h - 16;
+  if (g.pause_wpm_x1 < g.pause_wpm_x0 + 80) g.pause_wpm_x1 = g.pause_wpm_x0 + 80;
+  DrawRect(g.pause_wpm_x0, g.pause_wpm_y0,
+           g.pause_wpm_x1 - g.pause_wpm_x0,
+           g.pause_wpm_y1 - g.pause_wpm_y0, BLACK);
+  {
+    int ww = g.pause_wpm_x1 - g.pause_wpm_x0;
+    int wh = g.pause_wpm_y1 - g.pause_wpm_y0;
+    char wpm_l[32];
+    snprintf(wpm_l, sizeof(wpm_l), "%d WPM", g.wpm);
+    if (g.font_ui) SetFont(g.font_ui, BLACK);
+    DrawTextRect(g.pause_wpm_x0, g.pause_wpm_y0, ww / 4, wh, "-",
+                 ALIGN_CENTER | VALIGN_MIDDLE);
+    if (g.font_browse) SetFont(g.font_browse, BLACK);
+    DrawTextRect(g.pause_wpm_x0 + ww / 4, g.pause_wpm_y0, ww / 2, wh, wpm_l,
+                 ALIGN_CENTER | VALIGN_MIDDLE);
+    if (g.font_ui) SetFont(g.font_ui, BLACK);
+    DrawTextRect(g.pause_wpm_x0 + (3 * ww) / 4, g.pause_wpm_y0, ww / 4, wh, "+",
+                 ALIGN_CENTER | VALIGN_MIDDLE);
+  }
+
+  g.pause_chap_x0 = play_x + play_s + 12;
+  g.pause_chap_y0 = g.pause_wpm_y0;
+  g.pause_chap_x1 = g.sw - margin;
+  g.pause_chap_y1 = g.pause_wpm_y1;
+  DrawRect(g.pause_chap_x0, g.pause_chap_y0,
+           g.pause_chap_x1 - g.pause_chap_x0,
+           g.pause_chap_y1 - g.pause_chap_y0, BLACK);
+  if (g.font_ui) SetFont(g.font_ui, BLACK);
+  DrawTextRect(g.pause_chap_x0 + 8, g.pause_chap_y0,
+               g.pause_chap_x1 - g.pause_chap_x0 - 16,
+               g.pause_chap_y1 - g.pause_chap_y0, chap_label,
+               ALIGN_CENTER | VALIGN_MIDDLE);
+
+  /* --- Dual progress --- */
+  FillArea(0, prog_y, g.sw, prog_h, WHITE);
+  DrawLine(0, prog_y, g.sw, prog_y, LGRAY);
+  {
+    int half = (g.sw - 3 * margin) / 2;
+    int bx = margin;
+    int cx = margin * 2 + half;
+    char bl[48], cl[48];
+    snprintf(bl, sizeof(bl), "Book: %d%%", book_pct);
+    snprintf(cl, sizeof(cl), "Chapter: %d%%", ch_pct);
+    if (g.font_ui) SetFont(g.font_ui, BLACK);
+    DrawTextRect(bx, prog_y + 10, half, 28, bl, ALIGN_LEFT | VALIGN_MIDDLE);
+    DrawTextRect(cx, prog_y + 10, half, 28, cl, ALIGN_LEFT | VALIGN_MIDDLE);
+    pause_draw_progress_bar(bx, prog_y + 46, half, 18, book_pct);
+    pause_draw_progress_bar(cx, prog_y + 46, half, 18, ch_pct);
+  }
+}
+
+static void render_pause_options(void) {
+  /* Back-compat name — pause is now a full-screen composition. */
+  render_pause_screen();
 }
 
 static void render_control_bar(void) {
   if (!reader_chrome_on()) return;
 
   if (pause_options_on()) {
-    render_pause_options();
+    /* Drawn by render_pause_screen via render_reader_full */
     return;
   }
 
@@ -1616,6 +1786,14 @@ static void render_footer(void) {
 static void render_reader_full(void) {
   if (g.word_count <= 0) return;
   clear_wpm_badge();
+  if (pause_options_on()) {
+    g.display_word_idx = get_preview_idx();
+    dict_refresh_for_preview();
+    ClearScreen();
+    render_pause_screen();
+    FullUpdate();
+    return;
+  }
   ClearScreen();
   if (reader_has_top_bar()) {
     render_top_bar();
@@ -1638,6 +1816,8 @@ static void show_reader_chrome(void) {
 static void leave_book_to_browser(void) {
   save_progress();
   save_wpm();
+  save_dictionary_pref();
+  dict_close();
   stop_playback_timer();
   clear_wpm_badge();
   g.playing = 0;
@@ -1748,6 +1928,707 @@ static void draw_chapter_picker(void) {
                "tap: jump   ◄►: select   MENU: back",
                ALIGN_CENTER | VALIGN_MIDDLE);
   FullUpdate();
+}
+
+/* ---- Dictionary (one active .dic via InkView SDK) ---- */
+
+static int dict_is_punct_byte(unsigned char c) {
+  if (c >= 0x80) return 0;
+  if (isalnum(c)) return 0;
+  if (c == '\'' || c == '-' || c == '_') return 0;
+  return 1;
+}
+
+/* Strip leading/trailing ASCII punctuation for LookupWord (keep UTF-8 letters). */
+static void dict_make_query(char *out, size_t outsz, const char *word) {
+  const unsigned char *s;
+  const unsigned char *e;
+  size_t n;
+
+  out[0] = '\0';
+  if (!word || !outsz) return;
+  s = (const unsigned char *)word;
+  while (*s && dict_is_punct_byte(*s)) s++;
+  e = s + strlen((const char *)s);
+  while (e > s && dict_is_punct_byte(e[-1])) e--;
+  n = (size_t)(e - s);
+  if (n >= outsz) n = outsz - 1;
+  if (n > 0) memcpy(out, s, n);
+  out[n] = '\0';
+}
+
+/* PocketBook .dic definitions often embed HTML — strip to plain text for e-ink UI.
+ * Also drops $...$ tokens (PB phonetic glyph escapes like $⋅$ˈ$⋅$). */
+static void dict_html_to_text(char *out, size_t outsz, const char *in) {
+  size_t j = 0;
+  int space = 0;
+  int newline = 0;
+
+  if (!outsz) return;
+  out[0] = '\0';
+  if (!in) return;
+
+  while (*in && j + 1 < outsz) {
+    unsigned char c = (unsigned char)*in;
+
+    /* PB IPA / special glyphs encoded as $glyph$ — not useful as literal text */
+    if (c == '$') {
+      in++;
+      while (*in && *in != '$') in++;
+      if (*in == '$') in++;
+      continue;
+    }
+
+    if (c == '<') {
+      const char *tag = in + 1;
+      int is_br = 0;
+      int is_block = 0;
+      if ((tag[0] == 'b' || tag[0] == 'B') && (tag[1] == 'r' || tag[1] == 'R'))
+        is_br = 1;
+      else if ((tag[0] == '/' && (tag[1] == 'p' || tag[1] == 'P' || tag[1] == 'd' ||
+                                  tag[1] == 'D' || tag[1] == 'l' || tag[1] == 'L' ||
+                                  tag[1] == 'o' || tag[1] == 'O')) ||
+               tag[0] == 'p' || tag[0] == 'P' ||
+               ((tag[0] == 'd' || tag[0] == 'D') && (tag[1] == 'i' || tag[1] == 'I')) ||
+               ((tag[0] == 'l' || tag[0] == 'L') && (tag[1] == 'i' || tag[1] == 'I')) ||
+               ((tag[0] == 'o' || tag[0] == 'O') && (tag[1] == 'l' || tag[1] == 'L')))
+        is_block = 1;
+      while (*in && *in != '>') in++;
+      if (*in == '>') in++;
+      if ((is_br || is_block) && j > 0 && !newline) {
+        out[j++] = '\n';
+        space = 1;
+        newline = 1;
+      }
+      continue;
+    }
+
+    if (c == '&') {
+      char decoded = 0;
+      if (strncmp(in, "&amp;", 5) == 0) {
+        decoded = '&';
+        in += 5;
+      } else if (strncmp(in, "&lt;", 4) == 0) {
+        decoded = '<';
+        in += 4;
+      } else if (strncmp(in, "&gt;", 4) == 0) {
+        decoded = '>';
+        in += 4;
+      } else if (strncmp(in, "&quot;", 6) == 0) {
+        decoded = '"';
+        in += 6;
+      } else if (strncmp(in, "&apos;", 6) == 0) {
+        decoded = '\'';
+        in += 6;
+      } else if (strncmp(in, "&nbsp;", 6) == 0) {
+        decoded = ' ';
+        in += 6;
+      } else if (in[1] == '#') {
+        in += 2;
+        while (*in && *in != ';') in++;
+        if (*in == ';') in++;
+        decoded = ' ';
+      } else {
+        decoded = '&';
+        in++;
+      }
+      if (decoded == ' ' || decoded == '\n') {
+        if (!space && j > 0) {
+          out[j++] = decoded == '\n' ? '\n' : ' ';
+          space = 1;
+          newline = (decoded == '\n');
+        }
+      } else {
+        out[j++] = decoded;
+        space = 0;
+        newline = 0;
+      }
+      continue;
+    }
+
+    if (c == '\n' || c == '\r' || c == '\t') {
+      if (!space && j > 0) {
+        out[j++] = ' ';
+        space = 1;
+      }
+      in++;
+      continue;
+    }
+
+    /* Skip leftover '/' separators from PB markup like </font>/ */
+    if (c == '/' && (space || newline || j == 0)) {
+      in++;
+      continue;
+    }
+
+    out[j++] = (char)c;
+    space = (c == ' ');
+    newline = 0;
+    in++;
+  }
+  out[j] = '\0';
+
+  while (j > 0 && (out[j - 1] == ' ' || out[j - 1] == '\n')) {
+    out[--j] = '\0';
+  }
+}
+
+/* UTF-8 bullet • (U+2022) */
+static int dict_is_utf8_bullet(const char *s) {
+  return (unsigned char)s[0] == 0xE2 && (unsigned char)s[1] == 0x80 &&
+         (unsigned char)s[2] == 0xA2;
+}
+
+/* True if plain line is a Wiktionary "Usage:" note (secondary to translation). */
+static int dict_line_is_usage(const char *s) {
+  while (*s == ' ' || *s == '\t' || *s == '-' || *s == '*') s++;
+  if (dict_is_utf8_bullet(s)) {
+    s += 3;
+    while (*s == ' ') s++;
+  }
+  return (strncasecmp(s, "Usage:", 6) == 0);
+}
+
+static int dict_line_is_pos_only(const char *s) {
+  char buf[64];
+  size_t n = 0;
+  while (*s == ' ') s++;
+  if (dict_is_utf8_bullet(s)) {
+    s += 3;
+    while (*s == ' ') s++;
+  }
+  while (*s && *s != '\n' && n + 1 < sizeof(buf)) {
+    buf[n++] = (char)tolower((unsigned char)*s);
+    s++;
+  }
+  buf[n] = '\0';
+  while (n > 0 && buf[n - 1] == ' ') buf[--n] = '\0';
+  return (strcmp(buf, "noun") == 0 || strcmp(buf, "verb") == 0 ||
+          strcmp(buf, "adj") == 0 || strcmp(buf, "adv") == 0 ||
+          strcmp(buf, "v phras") == 0 || strcmp(buf, "adjective") == 0 ||
+          strcmp(buf, "adverb") == 0);
+}
+
+/* Append plain line to dst if non-empty / not redundant. */
+static void dict_append_line(char *dst, size_t dstsz, const char *line) {
+  size_t len, add;
+  while (*line == ' ') line++;
+  if (!line[0]) return;
+  len = strlen(dst);
+  add = strlen(line);
+  if (len > 0) {
+    if (len + 1 >= dstsz) return;
+    dst[len++] = '\n';
+    dst[len] = '\0';
+  }
+  if (len + add >= dstsz) add = dstsz - len - 1;
+  if (add > 0) {
+    memcpy(dst + len, line, add);
+    dst[len + add] = '\0';
+  }
+}
+
+/*
+ * Sableworks Wiktionary+ entries are typically:
+ *   [structured block: phonetics $..$, POS, Usage: ...]
+ *   • <i>czas.</i> real translation…
+ * Prefer the bilingual • <i>…</i> bullets; Usage is secondary.
+ */
+static void dict_format_definition(char *out, size_t outsz, const char *html) {
+  char preferred[DICT_TRANS_MAX];
+  char fallback[DICT_TRANS_MAX];
+  const char *p;
+
+  if (!outsz) return;
+  out[0] = '\0';
+  if (!html) return;
+
+  preferred[0] = '\0';
+  p = html;
+  while (*p) {
+    const char *bullet = NULL;
+    const char *scan;
+    const char *end;
+    char seg[900];
+    char plain[900];
+    size_t seglen;
+    const char *q;
+
+    /* Find next UTF-8 bullet • */
+    q = p;
+    while (*q) {
+      if (dict_is_utf8_bullet(q)) {
+        bullet = q;
+        break;
+      }
+      q++;
+    }
+    if (!bullet) break;
+
+    scan = bullet + 3;
+    while (*scan == ' ') scan++;
+
+    /* Skip Wiktionary structure bullets that open <div>/<ol> */
+    if (strncmp(scan, "<div", 4) == 0 || strncmp(scan, "<ol", 3) == 0 ||
+        scan[0] == '/') {
+      p = bullet + 3;
+      continue;
+    }
+
+    /* Keep bilingual bullets: • <i>pos.</i> translation */
+    if (strncmp(scan, "<i>", 3) != 0 && strncmp(scan, "<i ", 3) != 0) {
+      p = bullet + 3;
+      continue;
+    }
+
+    end = NULL;
+    q = bullet + 3;
+    while ((q = strstr(q, "<br>")) != NULL) {
+      const char *r = q + 4;
+      while (*r == ' ') r++;
+      if (dict_is_utf8_bullet(r)) {
+        end = q;
+        break;
+      }
+      q = r;
+    }
+    if (!end) end = html + strlen(html);
+
+    seglen = (size_t)(end - bullet);
+    if (seglen >= sizeof(seg)) seglen = sizeof(seg) - 1;
+    memcpy(seg, bullet, seglen);
+    seg[seglen] = '\0';
+    dict_html_to_text(plain, sizeof(plain), seg);
+    if (plain[0] && !dict_line_is_usage(plain)) {
+      dict_append_line(preferred, sizeof(preferred), plain);
+    }
+    p = end;
+    if (strncmp(p, "<br>", 4) == 0) p += 4;
+  }
+
+  if (preferred[0]) {
+    safe_strncpy(out, outsz, preferred);
+    return;
+  }
+
+  /* Fallback: full strip, drop Usage / POS-only / empty lines */
+  dict_html_to_text(fallback, sizeof(fallback), html);
+  preferred[0] = '\0';
+  p = fallback;
+  while (*p) {
+    char line[512];
+    size_t n = 0;
+    while (*p && *p != '\n' && n + 1 < sizeof(line)) {
+      line[n++] = *p++;
+    }
+    line[n] = '\0';
+    if (*p == '\n') p++;
+    if (!line[0] || dict_line_is_usage(line) || dict_line_is_pos_only(line)) continue;
+    dict_append_line(preferred, sizeof(preferred), line);
+  }
+  if (preferred[0])
+    safe_strncpy(out, outsz, preferred);
+  else
+    safe_strncpy(out, outsz, fallback);
+}
+
+static void dict_clear_result(void) {
+  g.dict_query[0] = '\0';
+  g.dict_head[0] = '\0';
+  g.dict_trans[0] = '\0';
+  g.dict_found = 0;
+}
+
+static void dict_close(void) {
+  if (g.dict_open) {
+    CloseDictionary();
+    g.dict_open = 0;
+  }
+  dict_clear_result();
+}
+
+static void dict_refresh_list(void) {
+  g.dict_list = EnumDictionaries();
+  g.dict_count = 0;
+  if (!g.dict_list) return;
+  while (g.dict_list[g.dict_count] && g.dict_list[g.dict_count][0]) {
+    g.dict_count++;
+    if (g.dict_count > 256) break;
+  }
+}
+
+static int dict_name_in_list(const char *name) {
+  if (!name || !name[0]) return 0;
+  dict_refresh_list();
+  for (int i = 0; i < g.dict_count; i++) {
+    if (strcmp(g.dict_list[i], name) == 0) return 1;
+  }
+  return 0;
+}
+
+static int dict_set_active(const char *name) {
+  if (!name || !name[0]) return 0;
+  if (g.dict_open && strcmp(g.dict_name, name) == 0) return 1;
+
+  dict_close();
+  if (OpenDictionary(name) == 0) {
+    g.dict_name[0] = '\0';
+    return 0;
+  }
+  safe_strncpy(g.dict_name, sizeof(g.dict_name), name);
+  g.dict_open = 1;
+  save_dictionary_pref();
+  return 1;
+}
+
+static int dict_ensure_open(void) {
+  dict_refresh_list();
+  if (g.dict_count <= 0) return 0;
+
+  if (g.dict_open && g.dict_name[0] && dict_name_in_list(g.dict_name)) {
+    return 1;
+  }
+
+  if (g.dict_name[0] && dict_name_in_list(g.dict_name)) {
+    if (dict_set_active(g.dict_name)) return 1;
+  }
+
+  return dict_set_active(g.dict_list[0]);
+}
+
+static void dict_lookup_current(void) {
+  char *head = NULL;
+  char *trans = NULL;
+  const char *src;
+  int idx;
+  int ok;
+
+  dict_clear_result();
+  if (!g.dict_open || g.word_count <= 0) return;
+
+  idx = g.display_word_idx;
+  if (idx < 0 || idx >= g.word_count) idx = get_preview_idx();
+  if (idx < 0 || idx >= g.word_count) return;
+  src = g.words[idx].word;
+  if (!src) return;
+
+  dict_make_query(g.dict_query, sizeof(g.dict_query), src);
+  if (!g.dict_query[0]) return;
+
+  ok = LookupWord(g.dict_query, &head, &trans);
+  if (!ok || !head) {
+    ok = LookupWordExact(g.dict_query, &head, &trans);
+  }
+  if (!ok || !head) {
+    safe_strncpy(g.dict_head, sizeof(g.dict_head), g.dict_query);
+    safe_strncpy(g.dict_trans, sizeof(g.dict_trans), "Not found in this dictionary.");
+    g.dict_found = 0;
+    return;
+  }
+
+  safe_strncpy(g.dict_head, sizeof(g.dict_head), head);
+  if (trans && trans[0]) {
+    dict_format_definition(g.dict_trans, sizeof(g.dict_trans), trans);
+    if (!g.dict_trans[0])
+      safe_strncpy(g.dict_trans, sizeof(g.dict_trans), "(no definition)");
+  } else {
+    safe_strncpy(g.dict_trans, sizeof(g.dict_trans), "(no definition)");
+  }
+  g.dict_found = 1;
+}
+
+static void dict_refresh_for_preview(void) {
+  g.display_word_idx = get_preview_idx();
+  if (dict_ensure_open()) {
+    dict_lookup_current();
+  } else {
+    dict_clear_result();
+  }
+}
+
+static int dict_picker_width(void) {
+  int w = g.sw / 3;
+  if (w < DICT_PICK_MIN_W) w = DICT_PICK_MIN_W;
+  if (w > DICT_PICK_MAX_W) w = DICT_PICK_MAX_W;
+  if (w > g.sw / 2) w = g.sw / 2;
+  return w;
+}
+
+/* Plain definition for the pause top bar (already HTML-stripped). */
+static void dict_trans_for_bar(char *out, size_t outsz) {
+  if (!outsz) return;
+  out[0] = '\0';
+  if (!g.dict_trans[0]) {
+    if (!g.dict_open) {
+      safe_strncpy(out, outsz, "No dictionary — tap left to choose");
+    } else if (g.dict_query[0]) {
+      safe_strncpy(out, outsz, "Not found");
+    }
+    return;
+  }
+  safe_strncpy(out, outsz, g.dict_trans);
+}
+
+static void render_dict_pause_bar(void) {
+  int pw = dict_picker_width();
+  char left[96];
+  char def[DICT_TRANS_MAX];
+
+  FillArea(0, 0, g.sw, DICT_BAR_H, WHITE);
+  DrawLine(0, DICT_BAR_H - 1, g.sw, DICT_BAR_H - 1, BLACK);
+
+  if (g.dict_name[0]) {
+    snprintf(left, sizeof(left), "▾ %s", g.dict_name);
+  } else {
+    safe_strncpy(left, sizeof(left), "▾ Dict");
+  }
+
+  /* Far left: dictionary picker (name can wrap a bit in the narrow column) */
+  if (g.font_ui) SetFont(g.font_ui, BLACK);
+  else if (g.font_browse) SetFont(g.font_browse, BLACK);
+  DrawTextRect(8, 6, pw - 14, DICT_BAR_H - 12, left, ALIGN_LEFT | VALIGN_TOP);
+  DrawLine(pw, 8, pw, DICT_BAR_H - 8, LGRAY);
+
+  /* Right: multi-line plain definition */
+  dict_trans_for_bar(def, sizeof(def));
+  DrawTextRect(pw + 10, 6, g.sw - pw - 18, DICT_BAR_H - 12, def,
+               ALIGN_LEFT | VALIGN_TOP);
+}
+
+static void pause_step_word(int delta) {
+  int idx;
+  if (g.word_count <= 0) return;
+  idx = get_preview_idx() + delta;
+  if (idx < 0) idx = 0;
+  if (idx >= g.word_count) idx = g.word_count - 1;
+  g.next_word_idx = idx;
+  g.display_word_idx = idx;
+  dict_refresh_for_preview();
+  save_progress();
+  render_reader_full();
+}
+
+static void dict_step_word(int delta) {
+  int idx;
+  if (g.word_count <= 0) return;
+  idx = g.display_word_idx;
+  if (idx < 0 || idx >= g.word_count) idx = get_preview_idx();
+  idx += delta;
+  if (idx < 0) idx = 0;
+  if (idx >= g.word_count) idx = g.word_count - 1;
+  g.display_word_idx = idx;
+  g.next_word_idx = idx;
+  dict_lookup_current();
+  draw_dictionary_panel();
+}
+
+static void close_dictionary_panel(void) {
+  g.reader_menu = READER_MENU_NONE;
+  g.chrome_visible = 1;
+  save_progress();
+  render_reader_full();
+}
+
+static void draw_dictionary_panel(void) {
+  int top_h = DICT_BAR_H;
+  int bot_h = DICT_BAR_H + 8;
+  int y;
+  char left_label[160];
+
+  ClearScreen();
+
+  FillArea(0, 0, g.sw, top_h, WHITE);
+  DrawLine(0, top_h - 1, g.sw, top_h - 1, BLACK);
+  if (g.font_browse) SetFont(g.font_browse, BLACK);
+  else if (g.font_ui) SetFont(g.font_ui, BLACK);
+
+  if (g.dict_name[0]) {
+    snprintf(left_label, sizeof(left_label), "▾ %s", g.dict_name);
+  } else {
+    safe_strncpy(left_label, sizeof(left_label), "▾ Choose dictionary");
+  }
+  DrawTextRect(12, 0, (g.sw * 2) / 3 - 16, top_h, left_label,
+               ALIGN_LEFT | VALIGN_MIDDLE);
+  DrawLine((g.sw * 2) / 3, 10, (g.sw * 2) / 3, top_h - 10, LGRAY);
+  DrawTextRect((g.sw * 2) / 3, 0, g.sw / 3, top_h, "Close",
+               ALIGN_CENTER | VALIGN_MIDDLE);
+
+  y = top_h + 16;
+  if (g.font_word) SetFont(g.font_word, BLACK);
+  {
+    const char *show = g.dict_query[0] ? g.dict_query : "—";
+    DrawTextRect(20, y, g.sw - 40, g.word_text_h + 8, show,
+                 ALIGN_CENTER | VALIGN_MIDDLE);
+    y += g.word_text_h + 20;
+  }
+
+  if (g.font_browse) SetFont(g.font_browse, BLACK);
+  if (g.dict_found && g.dict_head[0] &&
+      strcmp(g.dict_head, g.dict_query) != 0) {
+    char matched[DICT_HEAD_MAX + 16];
+    snprintf(matched, sizeof(matched), "→ %s", g.dict_head);
+    DrawTextRect(20, y, g.sw - 40, 36, matched, ALIGN_CENTER | VALIGN_MIDDLE);
+    y += 40;
+  }
+
+  DrawLine(24, y, g.sw - 24, y, LGRAY);
+  y += 12;
+
+  if (g.font_ui) SetFont(g.font_ui, BLACK);
+  else if (g.font_browse) SetFont(g.font_browse, BLACK);
+  {
+    int def_h = g.sh - bot_h - y - 8;
+    if (def_h < 80) def_h = 80;
+    DrawTextRect(20, y, g.sw - 40, def_h,
+                 g.dict_trans[0] ? g.dict_trans : "",
+                 ALIGN_LEFT | VALIGN_TOP);
+  }
+
+  FillArea(0, g.sh - bot_h, g.sw, bot_h, WHITE);
+  DrawLine(0, g.sh - bot_h, g.sw, g.sh - bot_h, BLACK);
+  if (g.font_browse) SetFont(g.font_browse, BLACK);
+  {
+    int third = g.sw / 3;
+    int by = g.sh - bot_h;
+    DrawTextRect(0, by, third, bot_h, "«", ALIGN_CENTER | VALIGN_MIDDLE);
+    DrawTextRect(third, by, third, bot_h, "Back", ALIGN_CENTER | VALIGN_MIDDLE);
+    DrawTextRect(2 * third, by, g.sw - 2 * third, bot_h, "»",
+                 ALIGN_CENTER | VALIGN_MIDDLE);
+    DrawLine(third, by + 12, third, g.sh - 12, LGRAY);
+    DrawLine(2 * third, by + 12, 2 * third, g.sh - 12, LGRAY);
+  }
+
+  FullUpdate();
+}
+
+static void open_dictionary_panel(void) {
+  if (g.playing) {
+    g.playing = 0;
+    stop_playback_timer();
+  }
+  save_progress();
+
+  dict_refresh_list();
+  if (g.dict_count <= 0) {
+    Message(ICON_INFORMATION, APP_DISPLAY_NAME,
+            "No dictionaries installed.\n"
+            "Copy .dic files to the device dictionaries folder.",
+            5000);
+    return;
+  }
+
+  if (!dict_ensure_open()) {
+    Message(ICON_ERROR, APP_DISPLAY_NAME,
+            "Could not open the dictionary.", 4000);
+    return;
+  }
+
+  g.display_word_idx = get_preview_idx();
+  dict_lookup_current();
+  g.reader_menu = READER_MENU_DICT;
+  g.chrome_visible = 0;
+  draw_dictionary_panel();
+}
+
+static int dict_list_rows(void) {
+  int body = g.sh - g.browse_header_h - CTRL_BAR_H;
+  int row_h = g.browse_row_h > 0 ? g.browse_row_h : BROWSE_ROW_H;
+  if (body < row_h) return 1;
+  return body / row_h;
+}
+
+static void draw_dict_picker(void) {
+  ClearScreen();
+  if (g.browse_row_h <= 0) g.browse_row_h = BROWSE_ROW_H;
+  if (g.browse_header_h <= 0) g.browse_header_h = BROWSE_HEADER_H;
+
+  if (g.font_browse_title) SetFont(g.font_browse_title, BLACK);
+  FillArea(0, 0, g.sw, g.browse_header_h, WHITE);
+  DrawTextRect(20, 0, g.sw - 40, g.browse_header_h, "Dictionaries",
+               ALIGN_LEFT | VALIGN_MIDDLE);
+  DrawLine(0, g.browse_header_h - 2, g.sw, g.browse_header_h - 2, BLACK);
+
+  dict_refresh_list();
+  {
+    int rows = dict_list_rows();
+    if (g.dict_sel < 0) g.dict_sel = 0;
+    if (g.dict_count > 0 && g.dict_sel >= g.dict_count)
+      g.dict_sel = g.dict_count - 1;
+    if (g.dict_sel < g.dict_scroll) g.dict_scroll = g.dict_sel;
+    if (g.dict_sel >= g.dict_scroll + rows)
+      g.dict_scroll = g.dict_sel - rows + 1;
+    if (g.dict_scroll < 0) g.dict_scroll = 0;
+
+    if (g.font_browse) SetFont(g.font_browse, BLACK);
+    for (int i = 0; i < rows; i++) {
+      int idx = g.dict_scroll + i;
+      int y;
+      int selected;
+      if (idx >= g.dict_count) break;
+      y = g.browse_header_h + i * g.browse_row_h;
+      selected = (idx == g.dict_sel);
+      if (selected) {
+        FillArea(0, y, g.sw, g.browse_row_h, BLACK);
+        if (g.font_browse) SetFont(g.font_browse, WHITE);
+      } else {
+        FillArea(0, y, g.sw, g.browse_row_h, WHITE);
+        if (g.font_browse) SetFont(g.font_browse, BLACK);
+      }
+      DrawTextRect(24, y, g.sw - 48, g.browse_row_h, g.dict_list[idx],
+                   ALIGN_LEFT | VALIGN_MIDDLE);
+      if (!selected)
+        DrawLine(20, y + g.browse_row_h - 1, g.sw - 20, y + g.browse_row_h - 1,
+                 LGRAY);
+    }
+  }
+
+  {
+    int fy = g.sh - CTRL_BAR_H;
+    FillArea(0, fy, g.sw, CTRL_BAR_H, WHITE);
+    DrawLine(0, fy, g.sw, fy, BLACK);
+    if (g.font_ui) SetFont(g.font_ui, BLACK);
+    DrawTextRect(12, fy, g.sw - 24, CTRL_BAR_H,
+                 "tap: select   ◄►: move   MENU: back",
+                 ALIGN_CENTER | VALIGN_MIDDLE);
+  }
+  FullUpdate();
+}
+
+static void open_dict_picker(int from_panel) {
+  dict_refresh_list();
+  if (g.dict_count <= 0) {
+    Message(ICON_INFORMATION, APP_DISPLAY_NAME,
+            "No dictionaries installed.", 4000);
+    return;
+  }
+  g.dict_pick_from_panel = from_panel ? 1 : 0;
+  g.reader_menu = READER_MENU_DICT_PICK;
+  g.dict_scroll = 0;
+  g.dict_sel = 0;
+  for (int i = 0; i < g.dict_count; i++) {
+    if (g.dict_name[0] && strcmp(g.dict_list[i], g.dict_name) == 0) {
+      g.dict_sel = i;
+      break;
+    }
+  }
+  draw_dict_picker();
+}
+
+static void pick_dictionary_at(int idx) {
+  if (idx < 0 || idx >= g.dict_count || !g.dict_list) return;
+  if (!dict_set_active(g.dict_list[idx])) {
+    Message(ICON_ERROR, APP_DISPLAY_NAME, "Could not open that dictionary.", 4000);
+    return;
+  }
+  dict_lookup_current();
+  if (g.dict_pick_from_panel) {
+    g.reader_menu = READER_MENU_DICT;
+    draw_dictionary_panel();
+  } else {
+    g.reader_menu = READER_MENU_NONE;
+    g.chrome_visible = 1;
+    render_reader_full();
+  }
 }
 
 /* Dolny panel WPM (gdy READER_MENU_WPM) — top bar zostaje */
@@ -1873,6 +2754,8 @@ static void set_playing(int enable, int from_menu) {
     g.reader_menu = READER_MENU_NONE;
   }
   if (g.reader_menu == READER_MENU_CHAPTERS) return;
+  if (g.reader_menu == READER_MENU_DICT) return;
+  if (g.reader_menu == READER_MENU_DICT_PICK) return;
 
   if (enable) {
     if (g.next_word_idx >= g.word_count && g.word_count > 0) {
@@ -1967,10 +2850,16 @@ static void load_wpm(void) {
         g.wpm = w;
         clamp_wpm();
       }
-      break;
+    } else if (strcmp(key, INI_KEY_DICT) == 0) {
+      if (val[0]) safe_strncpy(g.dict_name, sizeof(g.dict_name), val);
     }
   }
   iv_fclose(f);
+}
+
+static void load_dictionary_pref(void) {
+  /* Pref is loaded with load_wpm(); keep alias for clarity at call sites */
+  load_wpm();
 }
 
 static void load_progress_and_set_next_index(void) {
@@ -2005,8 +2894,8 @@ static void load_progress_and_set_next_index(void) {
   iv_fclose(f);
 }
 
-/* Zapis INI: zachowaj inne klucze, zaktualizuj path=idx oraz opcjonalnie wpm= */
-static void save_ini_keys(const char *path_key, int word_idx, int also_wpm) {
+/* Zapis INI: zachowaj inne klucze, zaktualizuj path=idx oraz opcjonalnie wpm=/dictionary= */
+static void save_ini_keys(const char *path_key, int word_idx, int also_wpm, int also_dict) {
   const char *path = save_file_path();
   char tmp_path[320];
   snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
@@ -2020,6 +2909,7 @@ static void save_ini_keys(const char *path_key, int word_idx, int also_wpm) {
 
   int updated_path = (path_key == NULL);
   int updated_wpm = !also_wpm;
+  int updated_dict = !also_dict;
 
   if (in) {
     char line[SAVE_LINE_MAX];
@@ -2042,6 +2932,15 @@ static void save_ini_keys(const char *path_key, int word_idx, int also_wpm) {
         snprintf(buf, sizeof(buf), "%s=%d\n", INI_KEY_WPM, g.wpm);
         iv_fwrite(buf, 1, (int)strlen(buf), out);
         updated_wpm = 1;
+      } else if (also_dict && strcmp(key, INI_KEY_DICT) == 0) {
+        if (g.dict_name[0]) {
+          char buf[SAVE_LINE_MAX];
+          int n = snprintf(buf, sizeof(buf), "%s=%s\n", INI_KEY_DICT, g.dict_name);
+          if (n > 0 && n < (int)sizeof(buf)) {
+            iv_fwrite(buf, 1, (int)strlen(buf), out);
+          }
+        }
+        updated_dict = 1;
       } else {
         iv_fwrite(key, 1, (int)strlen(key), out);
         iv_fwrite("=", 1, 1, out);
@@ -2063,6 +2962,13 @@ static void save_ini_keys(const char *path_key, int word_idx, int also_wpm) {
     snprintf(buf, sizeof(buf), "%s=%d\n", INI_KEY_WPM, g.wpm);
     iv_fwrite(buf, 1, (int)strlen(buf), out);
   }
+  if (!updated_dict && also_dict && g.dict_name[0]) {
+    char buf[SAVE_LINE_MAX];
+    int n = snprintf(buf, sizeof(buf), "%s=%s\n", INI_KEY_DICT, g.dict_name);
+    if (n > 0 && n < (int)sizeof(buf)) {
+      iv_fwrite(buf, 1, (int)strlen(buf), out);
+    }
+  }
 
   iv_fclose(out);
   iv_rename(tmp_path, path);
@@ -2075,12 +2981,16 @@ static void save_progress(void) {
   if (idx_to_save < 0) idx_to_save = 0;
   if (idx_to_save >= g.word_count) idx_to_save = g.word_count - 1;
 
-  save_ini_keys(g.epub_path, idx_to_save, 1);
+  save_ini_keys(g.epub_path, idx_to_save, 1, 1);
 }
 
 static void save_wpm(void) {
   clamp_wpm();
-  save_ini_keys(NULL, 0, 1);
+  save_ini_keys(NULL, 0, 1, 0);
+}
+
+static void save_dictionary_pref(void) {
+  save_ini_keys(NULL, 0, 0, 1);
 }
 
 // Mini-eksplorator: katalogi + pliki .epub (własny UI pod dotyk)
@@ -2713,6 +3623,14 @@ static int main_handler(int type, int par1, int par2) {
         draw_chapter_picker();
         return 0;
       }
+      if (g.reader_menu == READER_MENU_DICT) {
+        draw_dictionary_panel();
+        return 0;
+      }
+      if (g.reader_menu == READER_MENU_DICT_PICK) {
+        draw_dict_picker();
+        return 0;
+      }
       render_reader_full();
       if (g.reader_menu == READER_MENU_WPM)
         menu_redraw();
@@ -2726,9 +3644,11 @@ static int main_handler(int type, int par1, int par2) {
     if (g.epub_path && g.word_count > 0) {
       save_progress();
       save_wpm();
+      save_dictionary_pref();
     }
     clear_wpm_badge();
     ClearTimer(splash_timer);
+    dict_close();
     free_book_data();
     if (g.epub_path) free(g.epub_path);
     free_browse_entries();
@@ -2830,6 +3750,61 @@ static int main_handler(int type, int par1, int par2) {
         return 0;
       }
 
+      if (g.reader_menu == READER_MENU_DICT_PICK) {
+        int rows = dict_list_rows();
+        if (abs(delta) >= 24) {
+          int step = g.browse_row_h > 0 ? g.browse_row_h : BROWSE_ROW_H;
+          int row_delta = delta / step;
+          if (row_delta == 0) row_delta = (delta > 0) ? 1 : -1;
+          g.dict_scroll += row_delta;
+          if (g.dict_scroll < 0) g.dict_scroll = 0;
+          {
+            int maxs = 0;
+            if (g.dict_count > rows) maxs = g.dict_count - rows;
+            if (g.dict_scroll > maxs) g.dict_scroll = maxs;
+          }
+          if (g.dict_sel < g.dict_scroll) g.dict_sel = g.dict_scroll;
+          if (g.dict_sel >= g.dict_scroll + rows)
+            g.dict_sel = g.dict_scroll + rows - 1;
+          draw_dict_picker();
+          return 0;
+        }
+        if (up_y >= g.browse_header_h && up_y < g.sh - CTRL_BAR_H) {
+          int row = (up_y - g.browse_header_h) / g.browse_row_h;
+          int idx = g.dict_scroll + row;
+          if (row >= 0 && row < rows && idx >= 0 && idx < g.dict_count) {
+            g.dict_sel = idx;
+            pick_dictionary_at(idx);
+          }
+        }
+        return 0;
+      }
+
+      if (g.reader_menu == READER_MENU_DICT) {
+        int bot_h = DICT_BAR_H + 8;
+        int top_h = DICT_BAR_H;
+        if (up_y < top_h) {
+          if (up_x < (g.sw * 2) / 3) {
+            open_dict_picker(1);
+          } else {
+            close_dictionary_panel();
+          }
+          return 0;
+        }
+        if (up_y >= g.sh - bot_h) {
+          int third = g.sw / 3;
+          if (up_x < third) {
+            dict_step_word(-1);
+          } else if (up_x >= 2 * third) {
+            dict_step_word(+1);
+          } else {
+            close_dictionary_panel();
+          }
+          return 0;
+        }
+        return 0;
+      }
+
       if (g.reader_menu == READER_MENU_WPM) {
         if (abs(delta) >= 40) {
           if (delta > 0) g.wpm += WPM_SWIPE_STEP;
@@ -2870,70 +3845,64 @@ static int main_handler(int type, int par1, int par2) {
         return 0;
       }
 
-      /* Panel opcji po pauzie */
+      /* Pause screen — mockup hit targets */
       if (pause_options_on()) {
         if (abs(delta) >= 40) {
           if (delta > 0) g.wpm += WPM_SWIPE_STEP;
           else g.wpm -= WPM_SWIPE_STEP;
           clamp_wpm();
           save_wpm();
-          render_control_bar();
+          render_reader_full();
           return 0;
         }
 
-        if (up_y >= bar_y) {
-          int ph = pause_panel_h();
-          int info_h = PAUSE_INFO_H;
-          int row_h = (ph - info_h) / PAUSE_OPT_COUNT;
-          if (row_h < 64) row_h = 64;
-          if (info_h + PAUSE_OPT_COUNT * row_h > ph) {
-            info_h = ph - PAUSE_OPT_COUNT * row_h;
-            if (info_h < 120) info_h = 120;
-          }
-
-          if (up_y < bar_y + info_h) return 0;
-
-          int row = (up_y - bar_y - info_h) / row_h;
-          if (row < 0) row = 0;
-          if (row >= PAUSE_OPT_COUNT) row = PAUSE_OPT_COUNT - 1;
-
-          if (row == PAUSE_OPT_PLAY) {
-            set_playing(1, 0);
-          } else if (row == PAUSE_OPT_CHAPTERS) {
-            open_chapter_picker();
-          } else if (row == PAUSE_OPT_NAV) {
-            int third = g.sw / 3;
-            if (up_x < third) {
-              jump_relative_chapter(-1);
-            } else if (up_x >= 2 * third) {
-              jump_relative_chapter(+1);
-            } else {
-              jump_to_book_start();
-            }
-          } else if (row == PAUSE_OPT_WPM) {
-            int third = g.sw / 3;
-            if (up_x < third) {
-              g.wpm -= WPM_STEP;
-              clamp_wpm();
-              save_wpm();
-              render_control_bar();
-            } else if (up_x >= 2 * third) {
-              g.wpm += WPM_STEP;
-              clamp_wpm();
-              save_wpm();
-              render_control_bar();
-            } else {
-              g.reader_menu = READER_MENU_WPM;
-              render_reader_full();
-            }
-          } else if (row == PAUSE_OPT_LEAVE) {
-            leave_book_to_browser();
-          }
+        if (up_y < PAUSE_TOP_H && up_x < g.pause_lib_x1) {
+          leave_book_to_browser();
           return 0;
         }
 
-        /* Tap w podgląd słowa nad panelem = wznów */
-        set_playing(1, 0);
+        /* Tap empty word band (above dict card) = play; triangle stays too */
+        if (up_y >= g.pause_word_y0 && up_y < g.pause_word_y1) {
+          set_playing(1, 0);
+          return 0;
+        }
+
+        if (pause_hit(up_x, up_y, g.pause_dict_x0, g.pause_dict_y0,
+                      g.pause_dict_x1, g.pause_dict_y1)) {
+          open_dict_picker(0);
+          return 0;
+        }
+
+        if (pause_hit(up_x, up_y, g.pause_play_x0, g.pause_play_y0,
+                      g.pause_play_x1, g.pause_play_y1)) {
+          set_playing(1, 0);
+          return 0;
+        }
+
+        if (pause_hit(up_x, up_y, g.pause_chap_x0, g.pause_chap_y0,
+                      g.pause_chap_x1, g.pause_chap_y1)) {
+          open_chapter_picker();
+          return 0;
+        }
+
+        if (pause_hit(up_x, up_y, g.pause_wpm_x0, g.pause_wpm_y0,
+                      g.pause_wpm_x1, g.pause_wpm_y1)) {
+          int ww = g.pause_wpm_x1 - g.pause_wpm_x0;
+          int rel = up_x - g.pause_wpm_x0;
+          if (rel < ww / 3) {
+            g.wpm -= WPM_STEP;
+          } else if (rel > (2 * ww) / 3) {
+            g.wpm += WPM_STEP;
+          } else {
+            /* center label — no-op (WPM shown inline) */
+            return 0;
+          }
+          clamp_wpm();
+          save_wpm();
+          render_reader_full();
+          return 0;
+        }
+
         return 0;
       }
 
@@ -2963,6 +3932,7 @@ static int main_handler(int type, int par1, int par2) {
       if (g.epub_path && g.word_count > 0) {
         save_progress();
         save_wpm();
+        save_dictionary_pref();
       }
       CloseApp();
       return 0;
@@ -3006,7 +3976,20 @@ static int main_handler(int type, int par1, int par2) {
     /* Czytanie: Back = powrót do wyboru książki (nie wyjście z apki) */
     if (g.word_count > 0 && !g.browse_active) {
       if (key == KEY_BACK) {
-        if (g.reader_menu == READER_MENU_CHAPTERS || g.reader_menu == READER_MENU_WPM) {
+        if (g.reader_menu == READER_MENU_DICT_PICK) {
+          if (g.dict_pick_from_panel) {
+            g.reader_menu = READER_MENU_DICT;
+            draw_dictionary_panel();
+          } else {
+            g.reader_menu = READER_MENU_NONE;
+            g.chrome_visible = 1;
+            render_reader_full();
+          }
+          return 0;
+        }
+        if (g.reader_menu == READER_MENU_DICT ||
+            g.reader_menu == READER_MENU_CHAPTERS ||
+            g.reader_menu == READER_MENU_WPM) {
           g.reader_menu = READER_MENU_NONE;
           g.chrome_visible = 1;
           render_reader_full();
@@ -3017,7 +4000,20 @@ static int main_handler(int type, int par1, int par2) {
       }
 
       if (key == KEY_MENU) {
-        if (g.reader_menu == READER_MENU_CHAPTERS || g.reader_menu == READER_MENU_WPM) {
+        if (g.reader_menu == READER_MENU_DICT_PICK) {
+          if (g.dict_pick_from_panel) {
+            g.reader_menu = READER_MENU_DICT;
+            draw_dictionary_panel();
+          } else {
+            g.reader_menu = READER_MENU_NONE;
+            g.chrome_visible = 1;
+            render_reader_full();
+          }
+          return 0;
+        }
+        if (g.reader_menu == READER_MENU_DICT ||
+            g.reader_menu == READER_MENU_CHAPTERS ||
+            g.reader_menu == READER_MENU_WPM) {
           g.reader_menu = READER_MENU_NONE;
           g.chrome_visible = 1;
           render_reader_full();
@@ -3043,6 +4039,33 @@ static int main_handler(int type, int par1, int par2) {
         return 0;
       }
 
+      if (g.reader_menu == READER_MENU_DICT_PICK) {
+        if (key == KEY_PREV || key == KEY_UP || key == KEY_PREV2) {
+          g.dict_sel--;
+          if (g.dict_sel < 0) g.dict_sel = 0;
+          draw_dict_picker();
+        } else if (key == KEY_NEXT || key == KEY_DOWN || key == KEY_NEXT2) {
+          g.dict_sel++;
+          if (g.dict_sel >= g.dict_count) g.dict_sel = g.dict_count - 1;
+          draw_dict_picker();
+        } else if (key == KEY_OK) {
+          pick_dictionary_at(g.dict_sel);
+        }
+        return 0;
+      }
+
+      if (g.reader_menu == READER_MENU_DICT) {
+        if (key == KEY_PREV || key == KEY_UP || key == KEY_PREV2 || key == KEY_LEFT) {
+          dict_step_word(-1);
+        } else if (key == KEY_NEXT || key == KEY_DOWN || key == KEY_NEXT2 ||
+                   key == KEY_RIGHT) {
+          dict_step_word(+1);
+        } else if (key == KEY_OK) {
+          close_dictionary_panel();
+        }
+        return 0;
+      }
+
       if (g.reader_menu == READER_MENU_WPM) {
         if (key == KEY_PREV || key == KEY_UP || key == KEY_PREV2 || key == KEY_LEFT) {
           g.wpm -= WPM_STEP;
@@ -3059,6 +4082,18 @@ static int main_handler(int type, int par1, int par2) {
           render_reader_full();
         }
         return 0;
+      }
+
+      /* Pause screen: ◄/► step one word (and refresh dictionary bar) */
+      if (pause_options_on()) {
+        if (key == KEY_PREV || key == KEY_UP || key == KEY_PREV2 || key == KEY_LEFT) {
+          pause_step_word(-1);
+          return 0;
+        }
+        if (key == KEY_NEXT || key == KEY_DOWN || key == KEY_NEXT2 || key == KEY_RIGHT) {
+          pause_step_word(+1);
+          return 0;
+        }
       }
 
       if (key == KEY_OK) {

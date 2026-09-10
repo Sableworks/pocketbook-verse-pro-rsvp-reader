@@ -37,15 +37,17 @@ Swipe or the pause panel adjusts speed in steps of **±10**. Prefer staying near
 
 | Action | Gesture / key |
 | --- | --- |
-| Pause → options panel | Tap while playing |
-| Start / Resume | Tap “Start” / “Resume” (or tap the word preview) |
-| Speed ±10 WPM | Swipe up/down (play or pause) or −10 / +10 in the panel (**cap 200**, default **150**) |
-| Chapters | “Chapters” row in the pause panel |
-| ±1 chapter / start of book | Navigation row in the pause panel |
-| Another book | “Other book” or **Back** |
+| Pause | Tap while playing |
+| Start / Resume | **Play** button, or tap the word area above the dictionary card |
+| Speed ±10 WPM | Swipe up/down, or **− / +** on the pause screen (**cap 200**, default **150**) |
+| Dictionary lookup | Pause screen card — current word via PocketBook `.dic` (one active dictionary) |
+| Choose dictionary | Books icon on the dictionary card |
+| Step ±1 word (paused) | Hardware **◄ / ►** |
+| Chapters | **Chapter** button on the pause screen |
+| Another book | **‹ Library** (or **Back**) |
 | Exit app | **Home** |
 
-After opening a book, playback does **not** start automatically — you see a panel with progress (%), **chapter progress** (words left in the chapter), WPM, and Start/Resume.
+After opening a book, playback does **not** start automatically. The pause screen shows the current word, a dictionary card, WPM / Play / chapter controls, and **Book %** / **Chapter %** progress.
 
 ## Build from source (optional)
 
