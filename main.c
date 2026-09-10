@@ -1327,7 +1327,7 @@ static int current_chapter_index(void) {
   return cur;
 }
 
-/* Zakres słów rozdziału [start, end) — end = start następnego lub word_count */
+/* Chapter word range [start, end); end = next chapter start or word_count */
 static void chapter_word_range(int chap_idx, int *start_out, int *end_out) {
   int start = 0;
   int end = g.word_count;
@@ -1348,7 +1348,7 @@ static void chapter_word_range(int chap_idx, int *start_out, int *end_out) {
   if (end_out) *end_out = end;
 }
 
-/* Postęp w rozdziale: done = ile już w tym rozdziale, total = długość rozdziału */
+/* Chapter progress: done / total words in this chapter (same 1-based pos as book %) */
 static void chapter_progress(int chap_idx, int *done_out, int *total_out, int *pct_out) {
   int start = 0, end = 0;
   int pos;
@@ -1358,7 +1358,7 @@ static void chapter_progress(int chap_idx, int *done_out, int *total_out, int *p
   total = end - start;
   if (total < 0) total = 0;
 
-  pos = progress_word_num(); /* 1-based preview; 0 jeśli brak słów */
+  pos = progress_word_num(); /* 1-based preview; 0 if no words */
   if (total > 0 && pos > 0) {
     done = pos - start;
     if (done < 0) done = 0;

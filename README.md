@@ -45,7 +45,7 @@ Swipe or the pause panel adjusts speed in steps of **±10**. Prefer staying near
 | Another book | “Other book” or **Back** |
 | Exit app | **Home** |
 
-After opening a book, playback does **not** start automatically — you see a panel with progress (%), WPM, and Start/Resume.
+After opening a book, playback does **not** start automatically — you see a panel with progress (%), **chapter progress** (words left in the chapter), WPM, and Start/Resume.
 
 ## Build from source (optional)
 
