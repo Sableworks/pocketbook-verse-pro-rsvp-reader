@@ -48,11 +48,12 @@
 #define MENU_H_PX 220
 
 /* Pause screen (full layout). Word band keeps the same RSVP font/focal as play. */
-#define PAUSE_TOP_H 56
 #define PAUSE_CTRL_H 108
 #define PAUSE_PROG_H 92
 #define PAUSE_MARGIN 16
 #define PAUSE_PLAY_SIZE 76
+/* Library/title bar matches WPM/Chapter control box height (ctrl pad 16 each side). */
+#define PAUSE_TOP_H (PAUSE_CTRL_H - 2 * PAUSE_MARGIN)
 
 /* One active PocketBook .dic at a time (SDK holds the index; we cache one result). */
 #define DICT_NAME_MAX 128
@@ -3856,8 +3857,9 @@ static int main_handler(int type, int par1, int par2) {
           return 0;
         }
 
-        if (up_y < PAUSE_TOP_H && up_x < g.pause_lib_x1) {
-          leave_book_to_browser();
+        /* Whole Library/title chrome is a safe zone (taller = easier to hit). */
+        if (up_y < PAUSE_TOP_H) {
+          if (up_x < g.pause_lib_x1) leave_book_to_browser();
           return 0;
         }
 
