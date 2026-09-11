@@ -1646,9 +1646,9 @@ static void render_pause_screen(void) {
   pause_draw_play_icon(play_x, play_y, play_s, play_s);
 
   g.pause_wpm_x0 = margin;
-  g.pause_wpm_y0 = ctrl_y + 16;
+  g.pause_wpm_y0 = ctrl_y + margin;
   g.pause_wpm_x1 = play_x - 12;
-  g.pause_wpm_y1 = ctrl_y + ctrl_h - 16;
+  g.pause_wpm_y1 = ctrl_y + ctrl_h - margin;
   if (g.pause_wpm_x1 < g.pause_wpm_x0 + 80) g.pause_wpm_x1 = g.pause_wpm_x0 + 80;
   DrawRect(g.pause_wpm_x0, g.pause_wpm_y0,
            g.pause_wpm_x1 - g.pause_wpm_x0,
